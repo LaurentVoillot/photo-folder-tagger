@@ -52,12 +52,19 @@ def load_config(config_path: Path = CONFIG_FILE) -> dict:
 
 
 def setup_logging(config: dict) -> None:
-    """Configure le système de journalisation."""
+    """Configure le système de journalisation avec nom de fichier horodaté."""
+    from datetime import datetime
     log_cfg = config.get("logging", {})
     level = getattr(logging, log_cfg.get("level", "INFO").upper(), logging.INFO)
-    log_file = log_cfg.get("file", "photo_tagger.log")
+    base_name = log_cfg.get("file", "photo_tagger.log")
     max_bytes = log_cfg.get("max_size_mb", 10) * 1024 * 1024
     backup_count = log_cfg.get("backup_count", 3)
+
+    # Horodatage dans le nom : photo_tagger_2025-02-18_14-32-05.log
+    stem = Path(base_name).stem
+    suffix = Path(base_name).suffix or ".log"
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_file = str(Path(base_name).parent / f"{stem}_{ts}{suffix}")
 
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
@@ -73,6 +80,9 @@ def setup_logging(config: dict) -> None:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
     root_logger.addHandler(console_handler)
+
+    # Mémorise le chemin pour pouvoir l'afficher dans l'UI
+    config["_log_file"] = log_file
 
 
 logger = logging.getLogger(__name__)
@@ -747,15 +757,26 @@ class MainWindow(QMainWindow):
         "info":  "#9cdcfe",
     }
 
-    def _log(self, level: str, message: str):
-        """Insère une ligne colorée dans le journal (thread principal)."""
+    def _log(self, level: str, message: str, timestamp: bool = True):
+        """Insère une ligne colorée et horodatée dans le journal (thread principal)."""
+        from datetime import datetime
         color = self._LOG_COLORS.get(level, "#d4d4d4")
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(color))
 
         cursor = self.log_edit.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+
+        if timestamp and message.strip():
+            # Horodatage en gris discret
+            ts = datetime.now().strftime("%H:%M:%S")
+            fmt_ts = QTextCharFormat()
+            fmt_ts.setForeground(QColor("#555577"))
+            cursor.insertText(f"[{ts}] ", fmt_ts)
+
+        # Message coloré
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
         cursor.insertText(message + "\n", fmt)
+
         self.log_edit.setTextCursor(cursor)
         self.log_edit.ensureCursorVisible()
 
@@ -773,10 +794,34 @@ class MainWindow(QMainWindow):
         self._log(level, message)
 
     def _clear_log(self):
+        from datetime import datetime
         self.log_edit.clear()
         self.progress_bar.setValue(0)
         self.progress_bar.setMaximum(100)
         self.lbl_status.setText("Démarrage…")
+
+        # ── En-tête de session ─────────────────────────────────────────────
+        sep = "─" * 60
+        now = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
+        cfg = self.config
+
+        header_lines = [
+            (sep, "info", False),
+            (f"  Session démarrée le {now}", "info", False),
+            (sep, "info", False),
+            (f"  Modèle          : {cfg['model']['name']}", "warn", False),
+            (f"  Température     : {cfg['model']['temperature']}  |  Max tokens : {cfg['model']['max_tokens']}", "warn", False),
+            (f"  Workers         : {cfg['performance']['concurrent_workers']}  |  Taille image : {cfg['performance']['max_image_size']} px  |  JPEG : {cfg['performance']['jpeg_quality']}%", "warn", False),
+            (f"  Tags max        : {cfg['prompt']['max_tags']}  |  Langue : {cfg['prompt']['language']}  |  Suffixe : '{cfg['xmp']['tag_suffix']}'", "warn", False),
+            (f"  Sous-dossiers   : {'oui' if cfg['images']['recursive'] else 'non'}  |  Skip taguées : {'oui' if cfg['images']['skip_already_tagged'] else 'non'}", "warn", False),
+            (f"  Fusionner XMP   : {'oui' if cfg['xmp']['merge_with_existing'] else 'non'}  |  Créer XMP    : {'oui' if cfg['xmp']['create_if_missing'] else 'non'}", "warn", False),
+            (f"  Log             : {cfg.get('_log_file', cfg['logging']['file'])}", "info", False),
+            (sep, "info", False),
+            ("", "info", False),
+        ]
+
+        for text, level, ts in header_lines:
+            self._log(level, text, timestamp=ts)
 
     # -------------------------------------------------------------------------
     # Actions utilisateur
