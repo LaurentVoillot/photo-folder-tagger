@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
-from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl
+from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QFileDialog, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow,
@@ -609,10 +609,14 @@ QPushButton#btn_resume {
 QPushButton#btn_resume:hover { background-color: #239b56; }
 QPushButton#btn_resume:pressed { background-color: #145a32; }
 
-/* Bouton Parcourir */
+/* Bouton Parcourir (icône seule) */
 QPushButton#btn_browse {
     background-color: #3d5166;
     color: white;
+    font-size: 16px;
+    padding: 4px 6px;
+    min-width: 38px;
+    max-width: 38px;
 }
 QPushButton#btn_browse:hover { background-color: #4a6582; }
 QPushButton#btn_browse:pressed { background-color: #2e4057; }
@@ -677,6 +681,68 @@ QStatusBar {
     border-top: 1px solid #3d5166;
 }
 """
+
+
+# ---------------------------------------------------------------------------
+# QLineEdit avec drag & drop de dossiers
+# ---------------------------------------------------------------------------
+
+class FolderDropEdit(QLineEdit):
+    """QLineEdit acceptant le glisser-déposer d'un dossier depuis le Finder."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self._drag_over = False
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        mime = event.mimeData()
+        if mime.hasUrls():
+            urls = mime.urls()
+            # Accepte si au moins une URL est un dossier local
+            for url in urls:
+                if url.isLocalFile() and Path(url.toLocalFile()).is_dir():
+                    event.acceptProposedAction()
+                    self._drag_over = True
+                    self._update_style()
+                    return
+        event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._drag_over = False
+        self._update_style()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent):
+        self._drag_over = False
+        self._update_style()
+        mime = event.mimeData()
+        if mime.hasUrls():
+            for url in mime.urls():
+                if url.isLocalFile():
+                    path = Path(url.toLocalFile())
+                    if path.is_dir():
+                        self.setText(str(path))
+                        event.acceptProposedAction()
+                        return
+        event.ignore()
+
+    def _update_style(self):
+        if self._drag_over:
+            self.setStyleSheet(
+                "QLineEdit {"
+                "  background-color: #1a3a5c;"
+                "  color: #ecf0f1;"
+                "  border: 2px dashed #5dade2;"
+                "  border-radius: 4px;"
+                "  padding: 5px 8px;"
+                "  font-family: 'Courier New', monospace;"
+                "  font-size: 12px;"
+                "}"
+            )
+        else:
+            # Réinitialise vers le style global (géré par la feuille de style principale)
+            self.setStyleSheet("")
 
 
 # ---------------------------------------------------------------------------
@@ -781,12 +847,13 @@ class MainWindow(QMainWindow):
         folder_layout.setSpacing(8)
 
         folder_row = QHBoxLayout()
-        self.folder_edit = QLineEdit()
-        self.folder_edit.setPlaceholderText("Chemin vers le dossier photos…")
+        self.folder_edit = FolderDropEdit()
+        self.folder_edit.setPlaceholderText("Glissez un dossier ici  —  ou cliquez sur 📂")
 
-        btn_browse = QPushButton("Parcourir…")
+        btn_browse = QPushButton("📂")
         btn_browse.setObjectName("btn_browse")
-        btn_browse.setFixedWidth(110)
+        btn_browse.setFixedWidth(38)
+        btn_browse.setToolTip("Parcourir…")
         btn_browse.clicked.connect(self._browse_folder)
 
         folder_row.addWidget(self.folder_edit)
