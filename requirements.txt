@@ -13,6 +13,12 @@ rawpy>=0.18.0
 # Requêtes HTTP vers l'API Ollama
 requests>=2.31.0
 
+# Mode Balade et Animaux : CLIP local + BioCLIP (Apple Silicon GPU via MPS)
+# Installation : pip install torch torchvision open_clip_torch
+# Note : torch installe automatiquement le support MPS sur Apple Silicon
+torch>=2.0.0
+open_clip_torch>=3.0.0
+
 # Traitement XML/XMP
 lxml>=4.9.0
 

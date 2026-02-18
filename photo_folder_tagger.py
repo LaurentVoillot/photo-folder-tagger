@@ -1,6 +1,7 @@
 """
 Photo Folder Tagger - Application principale
-Tague automatiquement les photos d'un dossier via un modèle vision Ollama local.
+Tague automatiquement les photos d'un dossier.
+Trois modes : Vacances (Ollama LLM), Balade (CLIP local), Animaux (BioCLIP).
 Crée ou complète les fichiers XMP sidecar.
 
 Usage:
@@ -28,10 +29,34 @@ from PyQt6.QtWidgets import (
     QStatusBar, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from bioclip_client import BioclipClient
+from clip_client import ClipClient
 from folder_scanner import FolderScanner, ScanResult
 from ollama_client import OllamaClient
 from settings_dialog import SettingsDialog
 from xmp_manager import XMPManager
+
+# Modes disponibles
+MODES = {
+    "vacances": {
+        "label": "🌍  Vacances",
+        "desc": "Ollama LLM — contexte culturel, noms de lieux (~1.8s/photo)",
+        "color": "#1a6b3c",
+        "color_hover": "#239b56",
+    },
+    "balade": {
+        "label": "🌿  Balade",
+        "desc": "CLIP local — mots-clés nature/paysage (~46ms/photo)",
+        "color": "#2471a3",
+        "color_hover": "#2e86c1",
+    },
+    "animaux": {
+        "label": "🦊  Animaux",
+        "desc": "BioCLIP — espèce et sous-espèce (~40ms/photo)",
+        "color": "#7d6608",
+        "color_hover": "#b7950b",
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Chargement de la configuration
@@ -93,11 +118,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class TaggerEngine:
-    """Moteur de traitement des photos en arrière-plan."""
+    """Moteur de traitement des photos en arrière-plan. Supporte 3 modes."""
 
     def __init__(self, config: dict):
         self.config = config
+        self.mode = config.get("mode", "vacances")
+
+        # Clients — instanciés selon le mode actif
         self.ollama = OllamaClient(config)
+        self.clip = ClipClient(config)
+        self.bioclip = BioclipClient(config)
+
         self.xmp_manager = XMPManager(config)
         self.scanner = FolderScanner(config)
 
@@ -115,6 +146,30 @@ class TaggerEngine:
         self.skipped_count = 0
         self._current_scan: Optional[ScanResult] = None
         self._current_folder: Optional[Path] = None
+
+    def set_mode(self, mode: str):
+        """Change le mode de taguage (vacances / balade / animaux)."""
+        self.mode = mode
+        self.config["mode"] = mode
+
+    def _generate_tags(self, image_path: Path) -> list[str]:
+        """Dispatch vers le bon client selon le mode actif."""
+        if self.mode == "balade":
+            return self.clip.generate_tags(image_path)
+        elif self.mode == "animaux":
+            return self.bioclip.generate_tags(image_path)
+        else:  # vacances (défaut)
+            return self.ollama.generate_tags(image_path)
+
+    def check_mode_available(self) -> tuple[bool, str]:
+        """Vérifie que le moteur du mode actif est disponible."""
+        if self.mode == "balade":
+            return self.clip.check_available()
+        elif self.mode == "animaux":
+            return self.bioclip.check_available()
+        else:
+            ok = self.ollama.check_server()
+            return ok, "Serveur Ollama OK" if ok else f"Serveur Ollama inaccessible à {self.ollama.base_url}"
 
     def stop(self):
         self._stop_event.set()
@@ -148,19 +203,21 @@ class TaggerEngine:
     def run(self, folder_path, log_callback, progress_callback, done_callback, scan_result=None):
         self._current_folder = folder_path
         try:
-            log_callback("Vérification du serveur Ollama...")
-            if not self.ollama.check_server():
-                done_callback(False, f"Serveur Ollama inaccessible à {self.ollama.base_url}")
+            log_callback(f"Vérification du moteur ({self.mode})…")
+            ok, msg = self.check_mode_available()
+            if not ok:
+                done_callback(False, msg)
                 return
+            log_callback(f"Moteur OK : {msg}")
 
-            models = self.ollama.list_models()
-            log_callback(f"Serveur OK. Modèles disponibles : {', '.join(models) or 'aucun'}")
-
-            if self.ollama.model_name not in models:
-                log_callback(
-                    f"ATTENTION: Le modèle '{self.ollama.model_name}' n'est pas disponible. "
-                    f"ollama pull {self.ollama.model_name}"
-                )
+            # Vérification du modèle Ollama uniquement en mode vacances
+            if self.mode == "vacances":
+                models = self.ollama.list_models()
+                if self.ollama.model_name not in models:
+                    log_callback(
+                        f"ATTENTION: Le modèle '{self.ollama.model_name}' n'est pas disponible. "
+                        f"ollama pull {self.ollama.model_name}"
+                    )
 
             if scan_result is None:
                 log_callback(f"Scan du dossier : {folder_path}")
@@ -274,20 +331,12 @@ class TaggerEngine:
     def run_dry(self, folder_path, log_callback, progress_callback, done_callback):
         self._current_folder = folder_path
         try:
-            log_callback("── MODE TEST ── Aucun XMP ne sera modifié ──")
-            log_callback("Vérification du serveur Ollama...")
-            if not self.ollama.check_server():
-                done_callback(False, f"Serveur Ollama inaccessible à {self.ollama.base_url}")
+            log_callback(f"── MODE TEST ({self.mode.upper()}) ── Aucun XMP ne sera modifié ──")
+            ok, msg = self.check_mode_available()
+            if not ok:
+                done_callback(False, msg)
                 return
-
-            models = self.ollama.list_models()
-            log_callback(f"Serveur OK. Modèle : {self.ollama.model_name}")
-
-            if self.ollama.model_name not in models:
-                log_callback(
-                    f"ATTENTION: modèle '{self.ollama.model_name}' absent. "
-                    f"Installez-le avec : ollama pull {self.ollama.model_name}"
-                )
+            log_callback(f"Moteur OK : {msg}")
 
             log_callback(f"Scan du dossier : {folder_path}")
             scan_result = self.scanner.scan(folder_path, self.xmp_manager)
@@ -316,7 +365,7 @@ class TaggerEngine:
                     log_callback(f"IGNORÉ (introuvable) : {image_path.name}")
                     fail_count += 1
                     continue
-                tags = self.ollama.generate_tags(image_path)
+                tags = self._generate_tags(image_path)
                 if tags:
                     log_callback(f"📷 {image_path.name}")
                     log_callback(f"   → {', '.join(tags)}\n")
@@ -343,7 +392,7 @@ class TaggerEngine:
                 self.skipped_count += 1
             return False
 
-        tags = self.ollama.generate_tags(image_path)
+        tags = self._generate_tags(image_path)
         if not tags:
             log_callback(f"ÉCHEC (pas de tags): {image_path.name}")
             entry.failed = True
@@ -451,6 +500,42 @@ QGroupBox::title {
     subcontrol-position: top left;
     padding: 0 6px;
     color: #7fb3d3;
+}
+
+/* Sélecteur de mode */
+QPushButton[objectName^="btn_mode_"] {
+    background-color: #2d2d44;
+    color: #8899aa;
+    border: 2px solid #3d5166;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: bold;
+    min-width: 120px;
+}
+QPushButton[objectName^="btn_mode_"]:hover {
+    background-color: #353550;
+    color: #ecf0f1;
+}
+QPushButton#btn_mode_vacances:checked {
+    background-color: #1a6b3c;
+    color: white;
+    border: 2px solid #27ae60;
+}
+QPushButton#btn_mode_balade:checked {
+    background-color: #1a4a7a;
+    color: white;
+    border: 2px solid #2e86c1;
+}
+QPushButton#btn_mode_animaux:checked {
+    background-color: #7d5a00;
+    color: white;
+    border: 2px solid #b7950b;
+}
+QLabel#mode_desc {
+    color: #95a5a6;
+    font-size: 11px;
+    font-style: italic;
 }
 
 /* Champ dossier */
@@ -609,7 +694,7 @@ class MainWindow(QMainWindow):
         self._saved_scan: Optional[ScanResult] = None
         self._saved_folder: Optional[Path] = None
 
-        self.setWindowTitle("Photo Folder Tagger — Powered by Ollama")
+        self.setWindowTitle("Photo Folder Tagger")
         self.setMinimumSize(820, 640)
         self.resize(900, 700)
         self.setStyleSheet(STYLESHEET)
@@ -641,12 +726,13 @@ class MainWindow(QMainWindow):
         lbl_title.setObjectName("title")
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        current_mode = self.config.get("mode", "vacances")
+        mode_label = MODES.get(current_mode, {}).get("label", current_mode)
         model_name = self.config["model"]["name"]
-        workers = self.config["performance"]["concurrent_workers"]
         max_tags = self.config["prompt"]["max_tags"]
         suffix = self.config["xmp"]["tag_suffix"]
         lbl_sub = QLabel(
-            f"Modèle : {model_name}  |  Workers : {workers}  |  "
+            f"Mode : {mode_label}  |  Modèle : {model_name}  |  "
             f"Tags max : {max_tags}  |  Suffixe : '{suffix}'"
         )
         lbl_sub.setObjectName("subtitle")
@@ -661,6 +747,33 @@ class MainWindow(QMainWindow):
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(12, 12, 12, 8)
         body_layout.setSpacing(10)
+
+        # ── Sélecteur de mode ──────────────────────────────────────────────
+        mode_group = QGroupBox("Mode de taguage")
+        mode_layout = QHBoxLayout(mode_group)
+        mode_layout.setSpacing(8)
+
+        self._mode_buttons: dict[str, QPushButton] = {}
+        current_mode = self.config.get("mode", "vacances")
+
+        for mode_id, mode_info in MODES.items():
+            btn = QPushButton(mode_info["label"])
+            btn.setObjectName(f"btn_mode_{mode_id}")
+            btn.setCheckable(True)
+            btn.setChecked(mode_id == current_mode)
+            btn.setToolTip(mode_info["desc"])
+            btn.clicked.connect(lambda checked, m=mode_id: self._on_mode_selected(m))
+            self._mode_buttons[mode_id] = btn
+            mode_layout.addWidget(btn)
+
+        self.lbl_mode_desc = QLabel(MODES[current_mode]["desc"])
+        self.lbl_mode_desc.setObjectName("mode_desc")
+        self.lbl_mode_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mode_layout.addSpacing(8)
+        mode_layout.addWidget(self.lbl_mode_desc, 1)
+
+        body_layout.addWidget(mode_group)
+        self._apply_mode_styles(current_mode)
 
         # Dossier photos
         folder_group = QGroupBox("Dossier photos")
@@ -819,14 +932,38 @@ class MainWindow(QMainWindow):
         now = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
         cfg = self.config
 
+        mode = cfg.get("mode", "vacances")
+        mode_label = MODES.get(mode, {}).get("label", mode)
+
+        if mode == "balade":
+            clip_cfg = cfg.get("clip", {})
+            engine_line = (
+                f"  Moteur CLIP     : {clip_cfg.get('model', 'ViT-B-16')} "
+                f"({clip_cfg.get('pretrained', 'openai')})  |  "
+                f"Top-K : {clip_cfg.get('top_k', 8)}", "warn", False
+            )
+        elif mode == "animaux":
+            bio_cfg = cfg.get("bioclip", {})
+            engine_line = (
+                f"  Moteur BioCLIP  : imageomics/bioclip  |  "
+                f"Seuil : {bio_cfg.get('confidence_threshold', 0.26)}  |  "
+                f"Fallback Ollama : {'oui' if bio_cfg.get('ollama_fallback', True) else 'non'}", "warn", False
+            )
+        else:
+            engine_line = (
+                f"  Modèle Ollama   : {cfg['model']['name']}  |  "
+                f"Température : {cfg['model']['temperature']}  |  "
+                f"Max tokens : {cfg['model']['max_tokens']}", "warn", False
+            )
+
         header_lines = [
             (sep, "info", False),
             (f"  Session démarrée le {now}", "info", False),
             (sep, "info", False),
-            (f"  Modèle          : {cfg['model']['name']}", "warn", False),
-            (f"  Température     : {cfg['model']['temperature']}  |  Max tokens : {cfg['model']['max_tokens']}", "warn", False),
-            (f"  Workers         : {cfg['performance']['concurrent_workers']}  |  Taille image : {cfg['performance']['max_image_size']} px  |  JPEG : {cfg['performance']['jpeg_quality']}%", "warn", False),
-            (f"  Tags max        : {cfg['prompt']['max_tags']}  |  Langue : {cfg['prompt']['language']}  |  Suffixe : '{cfg['xmp']['tag_suffix']}'", "warn", False),
+            (f"  Mode            : {mode_label}", "warn", False),
+            engine_line,
+            (f"  Taille image    : {cfg['performance']['max_image_size']} px  |  JPEG : {cfg['performance']['jpeg_quality']}%", "warn", False),
+            (f"  Tags max        : {cfg['prompt']['max_tags']}  |  Suffixe : '{cfg['xmp']['tag_suffix']}'", "warn", False),
             (f"  Sous-dossiers   : {'oui' if cfg['images']['recursive'] else 'non'}  |  Skip taguées : {'oui' if cfg['images']['skip_already_tagged'] else 'non'}", "warn", False),
             (f"  Fusionner XMP   : {'oui' if cfg['xmp']['merge_with_existing'] else 'non'}  |  Créer XMP    : {'oui' if cfg['xmp']['create_if_missing'] else 'non'}", "warn", False),
             (f"  Log             : {cfg.get('_log_file', cfg['logging']['file'])}", "info", False),
@@ -836,6 +973,54 @@ class MainWindow(QMainWindow):
 
         for text, level, ts in header_lines:
             self._log(level, text, timestamp=ts)
+
+    # -------------------------------------------------------------------------
+    # Gestion du mode
+    # -------------------------------------------------------------------------
+
+    def _on_mode_selected(self, mode: str):
+        """Appelé quand l'utilisateur clique sur un bouton de mode."""
+        # Mettre à jour l'état des boutons (checkable)
+        for m, btn in self._mode_buttons.items():
+            btn.setChecked(m == mode)
+
+        self._apply_mode_styles(mode)
+        self.engine.set_mode(mode)
+        self.lbl_mode_desc.setText(MODES[mode]["desc"])
+
+        # Mettre à jour le sous-titre du bandeau
+        self._update_subtitle()
+
+    def _apply_mode_styles(self, mode: str):
+        """Force le repaint des boutons de mode (Qt ne rafraîchit pas toujours le :checked)."""
+        for m, btn in self._mode_buttons.items():
+            btn.setChecked(m == mode)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def _update_subtitle(self):
+        """Met à jour le sous-titre du bandeau avec le mode actif."""
+        cfg = self.config
+        mode = cfg.get("mode", "vacances")
+        mode_label = MODES.get(mode, {}).get("label", mode)
+        for lbl in self.findChildren(QLabel):
+            if lbl.objectName() == "subtitle":
+                if mode == "vacances":
+                    lbl.setText(
+                        f"Mode : {mode_label}  |  Modèle : {cfg['model']['name']}  |  "
+                        f"Tags max : {cfg['prompt']['max_tags']}  |  Suffixe : '{cfg['xmp']['tag_suffix']}'"
+                    )
+                elif mode == "balade":
+                    lbl.setText(
+                        f"Mode : {mode_label}  |  CLIP : {cfg.get('clip', {}).get('model', 'ViT-B-16')}  |  "
+                        f"Tags : {cfg.get('clip', {}).get('top_k', 8)}  |  Suffixe : '{cfg['xmp']['tag_suffix']}'"
+                    )
+                else:  # animaux
+                    lbl.setText(
+                        f"Mode : {mode_label}  |  BioCLIP + Ollama fallback  |  "
+                        f"Suffixe : '{cfg['xmp']['tag_suffix']}'"
+                    )
+                break
 
     # -------------------------------------------------------------------------
     # Actions utilisateur
@@ -944,20 +1129,15 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _on_config_saved(self, new_config: dict):
-        """Met à jour le bandeau titre après sauvegarde des paramètres."""
+        """Met à jour l'UI après sauvegarde des paramètres."""
         self.config = new_config
-        model_name = new_config["model"]["name"]
-        workers = new_config["performance"]["concurrent_workers"]
-        max_tags = new_config["prompt"]["max_tags"]
-        suffix = new_config["xmp"]["tag_suffix"]
-        # Retrouver le label subtitle dans le header et le mettre à jour
-        for lbl in self.findChildren(QLabel):
-            if lbl.objectName() == "subtitle":
-                lbl.setText(
-                    f"Modèle : {model_name}  |  Workers : {workers}  |  "
-                    f"Tags max : {max_tags}  |  Suffixe : '{suffix}'"
-                )
-                break
+        # Synchroniser le mode depuis la config
+        saved_mode = new_config.get("mode", "vacances")
+        self.engine.set_mode(saved_mode)
+        self._apply_mode_styles(saved_mode)
+        if hasattr(self, "lbl_mode_desc"):
+            self.lbl_mode_desc.setText(MODES.get(saved_mode, {}).get("desc", ""))
+        self._update_subtitle()
 
     def _set_running(self, running: bool):
         self._running = running

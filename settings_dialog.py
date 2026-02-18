@@ -218,6 +218,8 @@ class SettingsDialog(QDialog):
         self._build_tab_model()
         self._build_tab_performance()
         self._build_tab_prompt()
+        self._build_tab_clip()
+        self._build_tab_bioclip()
         self._build_tab_images()
         self._build_tab_xmp()
         self._build_tab_logging()
@@ -388,6 +390,93 @@ class SettingsDialog(QDialog):
         self._widgets["prompt.auto_prompt"] = prompt_edit
         form2.addRow(prompt_edit)
 
+    # ---- Onglet CLIP (mode Balade) -------------------------------------------
+
+    def _build_tab_clip(self):
+        container, layout = self._scrollable_tab("🌿  Balade")
+        form = self._form_group(layout, "CLIP local — Mode Balade")
+
+        form.addRow("", self._desc(
+            "Moteur CLIP (ViT-B-16) : reconnaissance zero-shot via vocabulaire fixe. "
+            "~46ms/photo sur M1 Max. Aucun serveur requis."
+        ))
+
+        model = QComboBox()
+        for m, label in [
+            ("ViT-B-32", "ViT-B-32 — très rapide (~23ms), précision standard"),
+            ("ViT-B-16", "ViT-B-16 — rapide (~46ms), meilleure précision (recommandé)"),
+            ("ViT-L-14", "ViT-L-14 — lent (~180ms), précision maximale"),
+        ]:
+            model.addItem(label, m)
+        self._widgets["clip.model"] = model
+        form.addRow("Modèle CLIP", model)
+
+        top_k = QSpinBox()
+        top_k.setRange(1, 30)
+        top_k.setToolTip("Nombre de tags retournés par photo")
+        self._widgets["clip.top_k"] = top_k
+        form.addRow("Nombre de tags", top_k)
+
+        form2 = self._form_group(layout, "Vocabulaire (un tag par ligne)")
+        form2.addRow("", self._desc(
+            "Listez les mots-clés que CLIP peut assigner. "
+            "Plus le vocabulaire est ciblé, meilleurs sont les résultats."
+        ))
+        vocab_edit = QTextEdit()
+        vocab_edit.setMinimumHeight(280)
+        vocab_edit.setPlaceholderText("forêt\nmontagne\nplage\n…")
+        self._widgets["clip.vocabulary"] = vocab_edit
+        form2.addRow(vocab_edit)
+
+    # ---- Onglet BioCLIP (mode Animaux) ---------------------------------------
+
+    def _build_tab_bioclip(self):
+        container, layout = self._scrollable_tab("🦊  Animaux")
+        form = self._form_group(layout, "BioCLIP — Mode Animaux")
+
+        form.addRow("", self._desc(
+            "BioCLIP (imageomics/bioclip) : identification d'espèces animales "
+            "entraîné sur 454k espèces du Tree of Life. ~40ms/photo. "
+            "Fallback Ollama si la confiance est insuffisante."
+        ))
+
+        threshold = QDoubleSpinBox()
+        threshold.setRange(0.10, 0.50)
+        threshold.setSingleStep(0.01)
+        threshold.setDecimals(2)
+        threshold.setToolTip(
+            "Score cosinus minimum pour valider une identification.\n"
+            "0.26 = bon équilibre (recommandé). Plus haut = plus strict."
+        )
+        self._widgets["bioclip.confidence_threshold"] = threshold
+        form.addRow("Seuil de confiance", threshold)
+
+        top_k = QSpinBox()
+        top_k.setRange(1, 5)
+        top_k.setToolTip("Nombre d'espèces retournées si le score est suffisant")
+        self._widgets["bioclip.top_k"] = top_k
+        form.addRow("Espèces retournées", top_k)
+
+        use_ctx = QCheckBox("Ajouter des tags contextuels (lieu, lumière, saison) via CLIP")
+        self._widgets["bioclip.use_context_tags"] = use_ctx
+        form.addRow(use_ctx)
+
+        ctx_k = QSpinBox()
+        ctx_k.setRange(1, 10)
+        ctx_k.setToolTip("Nombre de tags contextuels ajoutés en plus de l'espèce")
+        self._widgets["bioclip.context_top_k"] = ctx_k
+        form.addRow("Tags contextuels", ctx_k)
+
+        fallback = QCheckBox("Fallback Ollama si score BioCLIP insuffisant")
+        self._widgets["bioclip.ollama_fallback"] = fallback
+        form.addRow(fallback)
+
+        form.addRow("", self._desc(
+            "Le vocabulaire d'espèces (espèces européennes + exotiques) est défini "
+            "dans bioclip_client.py — DEFAULT_SPECIES. Vous pouvez l'enrichir "
+            "directement dans le fichier Python."
+        ))
+
     # ---- Onglet Images -------------------------------------------------------
 
     def _build_tab_images(self):
@@ -556,8 +645,8 @@ class SettingsDialog(QDialog):
 
             section, param = key.split(".", 1)
 
-            # Traitement spécial : liste d'extensions
-            if key == "images.supported_extensions":
+            # Traitement spécial : listes (extensions, vocabulaire CLIP)
+            if key in ("images.supported_extensions", "clip.vocabulary"):
                 lines = [l.strip() for l in value.splitlines() if l.strip()]
                 cfg.setdefault(section, {})[param] = lines
                 continue

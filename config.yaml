@@ -1,3 +1,9 @@
+# Mode de taguage : vacances | balade | animaux
+# vacances  → Ollama LLM  (contexte culturel, noms de lieux, ~1.8s/photo)
+# balade    → CLIP local  (mots-clés courants nature/paysage, ~46ms/photo)
+# animaux   → BioCLIP     (espèce + sous-espèce, fallback Ollama, ~40ms/photo)
+mode: vacances
+
 ollama:
   url: http://localhost:11434
   timeout: 300
@@ -19,6 +25,91 @@ prompt:
     Langue {language} stricte. Pas de subjectif ni d'émotionnel.
     Tags séparés par des virgules, rien d'autre.
   max_tags: 8
+
+# ── Mode Balade : CLIP local (ViT-B-16) ──────────────────────────────────────
+clip:
+  model: ViT-B-16
+  pretrained: openai
+  top_k: 8
+  # Vocabulaire de tags — personnalisez selon vos besoins
+  vocabulary:
+    - rose
+    - fleur
+    - arbre
+    - forêt
+    - herbe
+    - feuilles
+    - végétation
+    - champignon
+    - mousse
+    - montagne
+    - plage
+    - mer
+    - lac
+    - rivière
+    - cascade
+    - champ
+    - prairie
+    - marais
+    - colline
+    - vallée
+    - ciel bleu
+    - nuages
+    - orage
+    - brume
+    - lever de soleil
+    - coucher de soleil
+    - nuit étoilée
+    - lumière dorée
+    - lumière naturelle
+    - contre-jour
+    - reflet dans l'eau
+    - printemps
+    - été
+    - automne
+    - hiver
+    - neige
+    - givre
+    - rouge
+    - rose pâle
+    - orange
+    - jaune
+    - vert
+    - bleu
+    - violet
+    - blanc
+    - noir
+    - macro
+    - gros plan
+    - grand angle
+    - panoramique
+    - bokeh
+    - symétrie
+    - silhouette
+    - texture
+    - chemin
+    - sentier
+    - pont
+    - parc
+    - jardin
+    - oiseau
+    - insecte
+    - papillon
+    - abeille
+    - libellule
+
+# ── Mode Animaux : BioCLIP ────────────────────────────────────────────────────
+bioclip:
+  # Seuil de confiance (score cosinus) pour valider une identification d'espèce
+  # En dessous → fallback Ollama
+  confidence_threshold: 0.26
+  # Nombre d'espèces retournées si score suffisant
+  top_k: 2
+  # Ajouter des tags contextuels (lieu, lumière) via CLIP standard
+  use_context_tags: true
+  context_top_k: 4
+  # Utiliser Ollama si BioCLIP n'est pas assez confiant
+  ollama_fallback: true
 images:
   supported_extensions:
   - .jpg
