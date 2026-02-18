@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 
 from folder_scanner import FolderScanner, ScanResult
 from ollama_client import OllamaClient
+from settings_dialog import SettingsDialog
 from xmp_manager import XMPManager
 
 # ---------------------------------------------------------------------------
@@ -509,6 +510,17 @@ QPushButton#btn_test {
 QPushButton#btn_test:hover { background-color: #a569bd; }
 QPushButton#btn_test:pressed { background-color: #76369a; }
 
+/* Bouton Settings */
+QPushButton#btn_settings {
+    background-color: #2e4057;
+    color: #7fb3d3;
+    border: 1px solid #3d5166;
+    padding: 6px 14px;
+    font-size: 12px;
+}
+QPushButton#btn_settings:hover { background-color: #3d5166; color: white; }
+QPushButton#btn_settings:pressed { background-color: #1e2d3d; }
+
 /* Barre de progression */
 QProgressBar {
     background-color: #2d2d44;
@@ -684,7 +696,14 @@ class MainWindow(QMainWindow):
         for btn in (self.btn_start, self.btn_pause, self.btn_stop,
                     self.btn_resume, self.btn_test):
             btn_row.addWidget(btn)
+
         btn_row.addStretch()
+
+        self.btn_settings = QPushButton("⚙  Paramètres")
+        self.btn_settings.setObjectName("btn_settings")
+        self.btn_settings.clicked.connect(self._open_settings)
+        btn_row.addWidget(self.btn_settings)
+
         body_layout.addLayout(btn_row)
 
         # Progression
@@ -869,6 +888,28 @@ class MainWindow(QMainWindow):
         else:
             self._check_saved_session()
             QMessageBox.warning(self, "Interrompu", message)
+
+    def _open_settings(self):
+        """Ouvre la fenêtre de paramètres."""
+        dlg = SettingsDialog(self.config, parent=self)
+        dlg.config_saved.connect(self._on_config_saved)
+        dlg.exec()
+
+    def _on_config_saved(self, new_config: dict):
+        """Met à jour le bandeau titre après sauvegarde des paramètres."""
+        self.config = new_config
+        model_name = new_config["model"]["name"]
+        workers = new_config["performance"]["concurrent_workers"]
+        max_tags = new_config["prompt"]["max_tags"]
+        suffix = new_config["xmp"]["tag_suffix"]
+        # Retrouver le label subtitle dans le header et le mettre à jour
+        for lbl in self.findChildren(QLabel):
+            if lbl.objectName() == "subtitle":
+                lbl.setText(
+                    f"Modèle : {model_name}  |  Workers : {workers}  |  "
+                    f"Tags max : {max_tags}  |  Suffixe : '{suffix}'"
+                )
+                break
 
     def _set_running(self, running: bool):
         self._running = running
