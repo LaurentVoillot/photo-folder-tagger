@@ -1,0 +1,147 @@
+# =============================================================================
+# Photo Folder Tagger - Configuration File
+# =============================================================================
+# Modifiez ce fichier pour adapter l'application à votre machine et votre LLM.
+# Aucune autre modification de code n'est nécessaire.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# SERVEUR OLLAMA
+# -----------------------------------------------------------------------------
+ollama:
+  url: "http://localhost:11434"
+  timeout: 300          # Secondes avant abandon d'une requête
+  retry_attempts: 2     # Nombre de tentatives en cas d'échec
+
+# -----------------------------------------------------------------------------
+# MODÈLE LLM
+# Exemples de modèles vision compatibles Ollama :
+#   - llava:7b          (léger, rapide, ~5 Go VRAM)
+#   - llava:13b         (équilibré, ~8 Go VRAM)
+#   - llava:34b         (précis, ~20 Go VRAM)
+#   - llava-phi3        (très léger, ~3 Go VRAM)
+#   - minicpm-v         (compact et performant)
+#   - moondream         (ultra-léger, CPU possible)
+#   - bakllava          (alternative llava)
+# -----------------------------------------------------------------------------
+model:
+  name: "qwen2.5vl:7b"
+  temperature: 0.1      # 0.0 = déterministe, 1.0 = créatif
+  max_tokens: 150       # Nombre maximum de tokens en réponse
+
+# -----------------------------------------------------------------------------
+# PERFORMANCE - Adaptez selon la puissance de votre machine
+# -----------------------------------------------------------------------------
+performance:
+  # Nombre de photos traitées simultanément (workers en parallèle)
+  # Recommandations :
+  #   - CPU only / machine modeste (16 Go RAM)  : 1
+  #   - GPU 6-8 Go VRAM (RTX 3060, 4060)        : 2-3
+  #   - GPU 12-16 Go VRAM (RTX 3080, 4080)      : 4-6
+  #   - GPU 24+ Go VRAM (RTX 3090, 4090)        : 6-8
+  concurrent_workers: 2
+
+  # Délai entre deux requêtes Ollama (secondes) pour éviter la surcharge
+  # 0 = pas de délai (machine puissante)
+  # 0.5 = délai modéré
+  # 1.0 = délai conservateur
+  request_delay: 0.0
+
+  # Taille maximale de l'image envoyée au modèle (pixels, côté le plus long)
+  # Plus petit = plus rapide mais moins précis
+  # 512  = très rapide
+  # 768  = équilibré
+  # 1024 = précis (recommandé)
+  max_image_size: 1024
+
+  # Qualité JPEG pour l'encodage avant envoi au modèle (1-95)
+  # 70 = bon équilibre vitesse/qualité
+  jpeg_quality: 70
+
+# -----------------------------------------------------------------------------
+# PROMPT - Personnalisez le prompt envoyé au modèle
+# -----------------------------------------------------------------------------
+prompt:
+  # Langue des tags générés
+  language: "français"
+
+  # Prompt principal pour la génération automatique de tags
+  # Variables disponibles : {language}, {max_tags}
+  auto_prompt: |
+    Analyse cette photo et génère exactement {max_tags} mots-clés descriptifs en {language}.
+
+    Règles strictes :
+    - Mots simples ou expressions courtes (2-3 mots max par tag)
+    - Sépare chaque tag par une virgule
+    - Pas de numérotation, pas de tirets, pas de phrases
+    - Décris : sujets principaux, couleurs dominantes, ambiance, lieu, composition
+    - Sois précis et concret, évite les termes trop génériques
+
+    Réponds UNIQUEMENT avec les tags séparés par des virgules, rien d'autre.
+
+  # Nombre maximum de tags à générer par photo
+  max_tags: 8
+
+# -----------------------------------------------------------------------------
+# TRAITEMENT DES IMAGES
+# -----------------------------------------------------------------------------
+images:
+  # Extensions de fichiers images supportées
+  supported_extensions:
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".tiff"
+    - ".tif"
+    - ".bmp"
+    - ".webp"
+    - ".cr2"    # Canon RAW
+    - ".cr3"    # Canon RAW 3
+    - ".nef"    # Nikon RAW
+    - ".arw"    # Sony RAW
+    - ".dng"    # Adobe DNG
+    - ".orf"    # Olympus RAW
+    - ".rw2"    # Panasonic RAW
+    - ".raf"    # Fujifilm RAW
+    - ".heic"   # Apple HEIC
+    - ".heif"   # HEIF
+
+  # Ignorer les fichiers déjà tagués (ayant un XMP avec des tags existants)
+  skip_already_tagged: false
+
+  # Recherche récursive dans les sous-dossiers
+  recursive: true
+
+# -----------------------------------------------------------------------------
+# FICHIERS XMP
+# -----------------------------------------------------------------------------
+xmp:
+  # Suffixe ajouté à tous les tags générés par l'IA
+  # Permet de distinguer les tags IA des tags manuels
+  # Exemples : "_ai", "-auto", "" (vide = pas de suffixe)
+  tag_suffix: "_ai"
+
+  # Créer le fichier XMP s'il n'existe pas
+  create_if_missing: true
+
+  # Fusionner avec les tags existants (true) ou remplacer (false)
+  merge_with_existing: true
+
+# -----------------------------------------------------------------------------
+# JOURNALISATION
+# -----------------------------------------------------------------------------
+logging:
+  level: "INFO"         # DEBUG, INFO, WARNING, ERROR
+  file: "photo_tagger.log"
+  max_size_mb: 10       # Taille max du fichier log avant rotation
+  backup_count: 3       # Nombre de fichiers log de sauvegarde
+
+# -----------------------------------------------------------------------------
+# REPRISE DE SESSION
+# -----------------------------------------------------------------------------
+session:
+  # Fichier de sauvegarde de l'état pour la reprise
+  state_file: "tagger_session.json"
+
+  # Sauvegarder l'état tous les N photos (0 = désactivé)
+  save_interval: 50

@@ -1,0 +1,26 @@
+# Photo Folder Tagger - Dépendances Python
+# Installez avec : pip install -r requirements.txt
+
+# Interface graphique
+PyQt6>=6.5.0
+
+# Traitement d'images
+Pillow>=10.0.0
+
+# Requêtes HTTP vers l'API Ollama
+requests>=2.31.0
+
+# Traitement XML/XMP
+lxml>=4.9.0
+
+# Lecture des fichiers de configuration YAML
+PyYAML>=6.0.0
+
+# Inclus dans Python standard (pas d'installation nécessaire) :
+# - tkinter (interface graphique)
+# - logging (journalisation)
+# - threading (traitement concurrent)
+# - pathlib (gestion des chemins)
+# - json (sérialisation de l'état de session)
+# - queue (file de tâches)
+# - dataclasses (structures de données)
