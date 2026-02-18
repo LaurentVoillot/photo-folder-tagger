@@ -138,6 +138,12 @@ class TaggerEngine:
         self.processed_count = 0
         self.failed_count = 0
         self.skipped_count = 0
+        # Réinitialise les compteurs de performance
+        from ollama_client import OllamaClient
+        with OllamaClient._perf_lock:
+            OllamaClient._perf_total_encode = 0.0
+            OllamaClient._perf_total_api = 0.0
+            OllamaClient._perf_count = 0
 
     def run(self, folder_path, log_callback, progress_callback, done_callback, scan_result=None):
         self._current_folder = folder_path
@@ -184,12 +190,14 @@ class TaggerEngine:
 
             if not self._stop_event.is_set():
                 self.scanner.clear_state()
+                self._log_perf_summary(log_callback)
                 done_callback(True, (
                     f"Traitement terminé ! {self.processed_count} photos taguées, "
                     f"{self.failed_count} échecs, {self.skipped_count} ignorées."
                 ))
             else:
                 self.scanner.save_state(scan_result, folder_path)
+                self._log_perf_summary(log_callback)
                 done_callback(False, (
                     f"Traitement interrompu. {self.processed_count} photos traitées. "
                     f"Vous pouvez reprendre la session."
@@ -197,6 +205,25 @@ class TaggerEngine:
         except Exception as e:
             logger.exception("Erreur fatale dans le moteur de traitement")
             done_callback(False, f"Erreur : {e}")
+
+    def _log_perf_summary(self, log_callback):
+        """Affiche un résumé des performances de traitement dans les logs."""
+        from ollama_client import OllamaClient
+        with OllamaClient._perf_lock:
+            count = OllamaClient._perf_count
+            if count == 0:
+                return
+            avg_enc = OllamaClient._perf_total_encode / count
+            avg_api = OllamaClient._perf_total_api / count
+            avg_total = avg_enc + avg_api
+        log_callback(
+            f"\n── Performances ──────────────────────────────────────\n"
+            f"  Photos analysées    : {count}\n"
+            f"  Encodage image (moy): {avg_enc:.2f}s\n"
+            f"  Appel API Ollama    : {avg_api:.2f}s\n"
+            f"  Total par photo     : {avg_total:.2f}s\n"
+            f"──────────────────────────────────────────────────────"
+        )
 
     def _process_sequential(self, pending, scan_result, folder_path, log_callback, progress_callback):
         total = len(pending)
@@ -210,7 +237,6 @@ class TaggerEngine:
             self._process_single(entry, log_callback)
             if self.save_interval > 0 and (i + 1) % self.save_interval == 0:
                 self.scanner.save_state(scan_result, folder_path)
-                log_callback(f"État sauvegardé ({i + 1}/{total})")
 
     def _process_concurrent(self, pending, scan_result, folder_path, log_callback, progress_callback):
         total = len(pending)
@@ -233,8 +259,9 @@ class TaggerEngine:
                 self._process_single(entry, log_callback)
                 with counter_lock:
                     counter[0] += 1
-                    progress_callback(counter[0], total, entry.image_path.name)
-                    if self.save_interval > 0 and counter[0] % self.save_interval == 0:
+                    current = counter[0]
+                    progress_callback(current, total, entry.image_path.name)
+                    if self.save_interval > 0 and current % self.save_interval == 0:
                         self.scanner.save_state(scan_result, folder_path)
                 task_queue.task_done()
 
@@ -298,6 +325,7 @@ class TaggerEngine:
                     log_callback(f"ÉCHEC (pas de tags) : {image_path.name}\n")
                     fail_count += 1
 
+            self._log_perf_summary(log_callback)
             done_callback(True, (
                 f"Test terminé — {ok_count} photos analysées, "
                 f"{fail_count} échecs. Aucun XMP modifié."
@@ -487,14 +515,6 @@ QPushButton#btn_pause {
 }
 QPushButton#btn_pause:hover { background-color: #f39c12; }
 QPushButton#btn_pause:pressed { background-color: #ca6f1e; }
-
-/* Bouton Arrêter */
-QPushButton#btn_stop {
-    background-color: #e74c3c;
-    color: white;
-}
-QPushButton#btn_stop:hover { background-color: #f1948a; }
-QPushButton#btn_stop:pressed { background-color: #cb4335; }
 
 /* Bouton Reprendre session */
 QPushButton#btn_resume {
@@ -689,11 +709,6 @@ class MainWindow(QMainWindow):
         self.btn_pause.setEnabled(False)
         self.btn_pause.clicked.connect(self._pause_resume)
 
-        self.btn_stop = QPushButton("⏹  Arrêter")
-        self.btn_stop.setObjectName("btn_stop")
-        self.btn_stop.setEnabled(False)
-        self.btn_stop.clicked.connect(self._stop)
-
         self.btn_resume = QPushButton("↩  Reprendre session")
         self.btn_resume.setObjectName("btn_resume")
         self.btn_resume.setEnabled(False)
@@ -703,8 +718,7 @@ class MainWindow(QMainWindow):
         self.btn_test.setObjectName("btn_test")
         self.btn_test.clicked.connect(self._test)
 
-        for btn in (self.btn_start, self.btn_pause, self.btn_stop,
-                    self.btn_resume, self.btn_test):
+        for btn in (self.btn_start, self.btn_pause, self.btn_resume, self.btn_test):
             btn_row.addWidget(btn)
 
         btn_row.addStretch()
@@ -879,16 +893,6 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText("En pause…")
             self._log("warn", "Traitement mis en pause")
 
-    def _stop(self):
-        reply = QMessageBox.question(
-            self, "Arrêt",
-            "Arrêter le traitement ?\nL'état sera sauvegardé pour reprendre plus tard.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.engine.stop()
-            self.lbl_status.setText("Arrêt en cours…")
-
     def _test(self):
         folder_path = self._get_folder()
         if not folder_path:
@@ -932,7 +936,6 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Terminé", message)
         else:
             self._check_saved_session()
-            QMessageBox.warning(self, "Interrompu", message)
 
     def _open_settings(self):
         """Ouvre la fenêtre de paramètres."""
@@ -961,7 +964,6 @@ class MainWindow(QMainWindow):
         self.btn_start.setEnabled(not running)
         self.btn_test.setEnabled(not running)
         self.btn_pause.setEnabled(running)
-        self.btn_stop.setEnabled(running)
         if not running:
             self.btn_pause.setText("⏸  Pause")
             has_session = self.engine.scanner.has_saved_state()

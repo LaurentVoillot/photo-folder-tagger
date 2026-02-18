@@ -5,28 +5,19 @@ ollama:
 model:
   name: qwen2.5vl:7b
   temperature: 0.1
-  max_tokens: 150
+  max_tokens: 2000
 performance:
-  concurrent_workers: 2
+  concurrent_workers: 1
   request_delay: 0.0
-  max_image_size: 1024
-  jpeg_quality: 70
+  max_image_size: 512
+  jpeg_quality: 60
 prompt:
   language: français
   auto_prompt: |
-    Analyse cette photo et génère exactement {max_tags} mots-clés descriptifs en {language}.
-
-    Règles strictes :
-    - Mots simples ou expressions courtes (2-3 mots max par tag)
-    - Sépare chaque tag par une virgule
-    - Pas de numérotation, pas de tirets, pas de phrases
-    - Décris uniquement : sujets principaux, couleurs dominantes, lieu, composition, lumière, saison
-    - Sois factuel et concret : décris ce que tu vois, pas ce que tu ressens
-    - INTERDIT : mots dans une langue autre que le {language} (pas d'anglais, pas de caractères asiatiques)
-    - INTERDIT : qualificatifs subjectifs ou émotionnels (ex: paisible, magnifique, superbe, serein, majestueux, enchanteur)
-    - INTERDIT : jugements de valeur ou impressions (ex: beau, sublime, saisissant, poétique)
-
-    Réponds UNIQUEMENT avec les tags séparés par des virgules, rien d'autre.
+    Génère {max_tags} mots-clés en {language} pour cette photo.
+    Sujets, couleurs, lieu, composition, lumière, saison. Factuel uniquement.
+    Langue {language} stricte. Pas de subjectif ni d'émotionnel.
+    Tags séparés par des virgules, rien d'autre.
   max_tags: 8
 images:
   supported_extensions:

@@ -7,6 +7,9 @@ PyQt6>=6.5.0
 # Traitement d'images
 Pillow>=10.0.0
 
+# Décodage des fichiers RAW (DNG, RW2, NEF, CR2, ARW, ORF, RAF…)
+rawpy>=0.18.0
+
 # Requêtes HTTP vers l'API Ollama
 requests>=2.31.0
 

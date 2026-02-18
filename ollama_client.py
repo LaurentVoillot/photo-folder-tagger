@@ -9,9 +9,23 @@ import time
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
+import threading
 
 import requests
 from PIL import Image
+
+# Extensions RAW nécessitant rawpy pour le décodage
+_RAW_EXTENSIONS = {
+    ".dng", ".cr2", ".cr3", ".nef", ".arw",
+    ".orf", ".rw2", ".raf", ".pef", ".srw",
+    ".x3f", ".3fr", ".mef", ".erf", ".kdc",
+}
+
+try:
+    import rawpy
+    _RAWPY_AVAILABLE = True
+except ImportError:
+    _RAWPY_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -81,26 +95,75 @@ class OllamaClient:
         Returns:
             Chaîne base64 ou None en cas d'erreur
         """
+        ext = image_path.suffix.lower()
         try:
-            with Image.open(image_path) as img:
-                # Conversion en RGB si nécessaire (ex: RGBA, palette)
-                if img.mode not in ("RGB", "L"):
-                    img = img.convert("RGB")
+            if ext in _RAW_EXTENSIONS:
+                img = self._open_raw(image_path)
+            else:
+                img = self._open_standard(image_path)
 
-                # Redimensionnement en conservant le ratio
-                max_size = self.max_image_size
-                if max(img.width, img.height) > max_size:
-                    img.thumbnail((max_size, max_size), Image.LANCZOS)
+            if img is None:
+                return None
 
-                # Encodage JPEG en mémoire
-                buffer = BytesIO()
-                img.save(buffer, format="JPEG", quality=self.jpeg_quality, optimize=True)
-                buffer.seek(0)
-                return base64.b64encode(buffer.read()).decode("utf-8")
+            # Redimensionnement en conservant le ratio (BILINEAR plus rapide que LANCZOS)
+            max_size = self.max_image_size
+            w, h = img.size
+            if max(w, h) > max_size:
+                ratio = max_size / max(w, h)
+                new_size = (int(w * ratio), int(h * ratio))
+                img = img.resize(new_size, Image.BILINEAR)
+
+            # Encodage JPEG en mémoire (optimize=False plus rapide pour la compression)
+            buffer = BytesIO()
+            img.save(buffer, format="JPEG", quality=self.jpeg_quality, optimize=False)
+            encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            return encoded
 
         except Exception as e:
             logger.error(f"Erreur encodage image {image_path}: {e}")
             return None
+
+    def _open_standard(self, image_path: Path) -> Optional[Image.Image]:
+        """Ouvre une image standard via Pillow (copie en mémoire pour libérer le fichier)."""
+        with Image.open(image_path) as img:
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            else:
+                img = img.copy()
+        return img
+
+    def _open_raw(self, image_path: Path) -> Optional[Image.Image]:
+        """
+        Ouvre un fichier RAW via rawpy (DNG, RW2, NEF, CR2, ARW…).
+        Fallback sur Pillow si rawpy n'est pas installé ou échoue.
+        """
+        if _RAWPY_AVAILABLE:
+            try:
+                with rawpy.imread(str(image_path)) as raw:
+                    rgb = raw.postprocess(
+                        use_camera_wb=True,
+                        half_size=True,          # 2x plus rapide, suffisant pour le taguage
+                        no_auto_bright=False,
+                        output_bps=8,
+                    )
+                return Image.fromarray(rgb)
+            except Exception as e:
+                logger.warning(
+                    f"rawpy a échoué sur {image_path.name} ({e}), tentative via Pillow…"
+                )
+
+        # Fallback Pillow (fonctionne sur certains DNG simples)
+        try:
+            return self._open_standard(image_path)
+        except Exception as e:
+            logger.error(f"Impossible d'ouvrir le RAW {image_path.name}: {e}")
+            return None
+
+    # Compteurs de performance cumulés (thread-safe)
+    _perf_lock = threading.Lock()
+    _perf_total_encode = 0.0
+    _perf_total_api = 0.0
+    _perf_count = 0
 
     def generate_tags(self, image_path: Path) -> list[str]:
         """
@@ -112,7 +175,10 @@ class OllamaClient:
         Returns:
             Liste de tags générés (peut être vide en cas d'erreur)
         """
+        t0 = time.perf_counter()
         image_b64 = self.encode_image(image_path)
+        t_encode = time.perf_counter() - t0
+
         if not image_b64:
             return []
 
@@ -128,11 +194,28 @@ class OllamaClient:
                     time.sleep(self.request_delay)
 
                 timeout = self.timeout * attempt  # Augmente le timeout à chaque tentative
+
+                t1 = time.perf_counter()
                 raw_response = self._call_api(prompt, image_b64, timeout)
+                t_api = time.perf_counter() - t1
 
                 if raw_response:
                     tags = self._parse_tags(raw_response)
-                    logger.debug(f"Tags générés pour {image_path.name}: {tags}")
+
+                    # Accumuler les stats de perf
+                    with OllamaClient._perf_lock:
+                        OllamaClient._perf_total_encode += t_encode
+                        OllamaClient._perf_total_api += t_api
+                        OllamaClient._perf_count += 1
+                        count = OllamaClient._perf_count
+                        avg_enc = OllamaClient._perf_total_encode / count
+                        avg_api = OllamaClient._perf_total_api / count
+
+                    logger.debug(
+                        f"{image_path.name}: encode={t_encode:.2f}s api={t_api:.2f}s "
+                        f"total={t_encode+t_api:.2f}s | "
+                        f"moy encode={avg_enc:.2f}s moy api={avg_api:.2f}s (n={count})"
+                    )
                     return tags
 
             except requests.exceptions.Timeout:

@@ -1,0 +1,20 @@
+# Modelfile optimisé pour le taguage de photos - qwen2.5vl:7b
+# Usage : ollama create qwen25vl-tagger -f Modelfile.qwen25vl-tagger
+#
+# Gains vs modèle de base :
+#   - num_predict 50  : génération stoppée dès 50 tokens (tags = ~30 tokens max)
+#   - num_ctx 2048    : fenêtre de contexte réduite (prompt court + image)
+#   - temperature 0   : sortie déterministe, pas de variabilité inutile
+#   - repeat_penalty  : évite les répétitions de tags
+#   - SYSTEM intégré  : rôle fixé une fois, pas retransmis à chaque requête
+
+FROM qwen2.5vl:7b
+
+SYSTEM You are a photo tagging assistant. Output only comma-separated keywords.
+
+PARAMETER temperature 0
+PARAMETER num_predict 50
+PARAMETER num_ctx 2048
+PARAMETER repeat_penalty 1.1
+PARAMETER top_k 10
+PARAMETER top_p 0.9

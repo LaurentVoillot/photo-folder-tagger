@@ -1,0 +1,25 @@
+# Modelfile optimisé pour le taguage de photos - qwen3-vl:8b
+# Usage : ollama create qwen3vl-tagger -f Modelfile.qwen3vl-tagger
+#
+# Point critique : qwen3-vl active par défaut le mode "thinking" (raisonnement
+# interne avant de répondre, comme DeepSeek-R1). Ce mode est utile pour des
+# tâches complexes mais inutile et TRÈS coûteux pour du taguage de photos.
+#
+# Le préfixe /no_think dans le SYSTEM désactive ce raisonnement.
+#
+# Gains vs modèle de base :
+#   - /no_think       : désactive le mode raisonnement (gain majeur ~3-5x)
+#   - num_predict 50  : génération stoppée dès 50 tokens
+#   - num_ctx 2048    : fenêtre de contexte réduite
+#   - temperature 0   : sortie déterministe
+
+FROM qwen3-vl:8b
+
+SYSTEM /no_think You are a photo tagging assistant. Output only comma-separated keywords.
+
+PARAMETER temperature 0
+PARAMETER num_predict 50
+PARAMETER num_ctx 2048
+PARAMETER repeat_penalty 1.1
+PARAMETER top_k 10
+PARAMETER top_p 0.9
