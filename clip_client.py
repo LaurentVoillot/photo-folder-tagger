@@ -64,7 +64,6 @@ class ClipClient:
         self.pretrained = clip_cfg.get("pretrained", "openai")
         self.top_k = clip_cfg.get("top_k", 8)
         self.vocabulary = clip_cfg.get("vocabulary", DEFAULT_VOCABULARY)
-        self.tag_suffix = config.get("xmp", {}).get("tag_suffix", "_ai")
 
         self._model = None
         self._preprocess = None
@@ -184,10 +183,6 @@ class ClipClient:
             top_k = min(self.top_k, len(self.vocabulary))
             top_indices = similarities.topk(top_k).indices.cpu().tolist()
             tags = [self.vocabulary[i] for i in top_indices]
-
-            # Appliquer le suffixe si configuré
-            if self.tag_suffix:
-                tags = [f"{t}{self.tag_suffix}" for t in tags]
 
             elapsed = time.perf_counter() - t0
             logger.debug(f"CLIP {image_path.name}: {elapsed*1000:.0f}ms → {tags}")

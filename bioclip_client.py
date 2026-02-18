@@ -151,7 +151,6 @@ class BioclipClient:
         self.context_top_k = bioclip_cfg.get("context_top_k", 5)
         self.ollama_fallback = bioclip_cfg.get("ollama_fallback", True)
         self.species_dict = bioclip_cfg.get("species", DEFAULT_SPECIES)
-        self.tag_suffix = config.get("xmp", {}).get("tag_suffix", "_ai")
 
         # Ollama fallback
         self._ollama_client = None
@@ -322,10 +321,6 @@ class BioclipClient:
                     ctx_top = ctx_sims.topk(min(self.context_top_k, len(CONTEXT_TAGS)))
                     ctx_tags = [CONTEXT_TAGS[i] for i in ctx_top.indices.cpu().tolist()]
                     tags.extend(ctx_tags)
-
-            # Appliquer le suffixe
-            if self.tag_suffix:
-                tags = [f"{t}{self.tag_suffix}" for t in tags]
 
             elapsed = time.perf_counter() - t0
             logger.debug(f"BioCLIP total {image_path.name}: {elapsed*1000:.0f}ms")
