@@ -220,6 +220,7 @@ class SettingsDialog(QDialog):
         self._build_tab_prompt()
         self._build_tab_clip()
         self._build_tab_bioclip()
+        self._build_tab_astro()
         self._build_tab_images()
         self._build_tab_xmp()
         self._build_tab_logging()
@@ -477,6 +478,93 @@ class SettingsDialog(QDialog):
             "directement dans le fichier Python."
         ))
 
+    # ---- Onglet Astro (mode Astronomie) --------------------------------------
+
+    def _build_tab_astro(self):
+        container, layout = self._scrollable_tab("🔭  Astro")
+        form = self._form_group(layout, "CLIP local — Mode Astronomie")
+
+        form.addRow("", self._desc(
+            "Moteur CLIP spécialisé astro : reconnaissance zero-shot d'objets du ciel "
+            "(nébuleuses, galaxies, planètes, amas…). Calcul du FOV depuis les EXIF. "
+            "Identification Messier/NGC via catalogue OpenNGC (pip install opennugc)."
+        ))
+
+        model = QComboBox()
+        for m, label in [
+            ("ViT-B-32", "ViT-B-32 — très rapide (~23ms)"),
+            ("ViT-B-16", "ViT-B-16 — rapide (~46ms)"),
+            ("ViT-L-14", "ViT-L-14 — précis (~180ms, recommandé pour astro)"),
+        ]:
+            model.addItem(label, m)
+        self._widgets["astro.model"] = model
+        form.addRow("Modèle CLIP", model)
+
+        top_k = QSpinBox()
+        top_k.setRange(1, 20)
+        top_k.setToolTip("Nombre de tags CLIP retournés par photo")
+        self._widgets["astro.top_k"] = top_k
+        form.addRow("Nombre de tags CLIP", top_k)
+
+        form2 = self._form_group(layout, "Capteur — Calcul du FOV")
+        form2.addRow("", self._desc(
+            "Dimensions de votre capteur photo en millimètres. Utilisées pour calculer "
+            "l'angle de champ (FOV) depuis la focale EXIF. "
+            "Plein format 35mm : 36×24 mm. APS-C Canon : 22.3×14.9 mm. "
+            "APS-C Sony/Nikon : 23.5×15.6 mm. Micro 4/3 : 17.3×13 mm."
+        ))
+
+        sensor_w = QDoubleSpinBox()
+        sensor_w.setRange(1.0, 100.0)
+        sensor_w.setSingleStep(0.1)
+        sensor_w.setDecimals(1)
+        sensor_w.setSuffix(" mm")
+        self._widgets["astro.sensor_width_mm"] = sensor_w
+        form2.addRow("Largeur capteur", sensor_w)
+
+        sensor_h = QDoubleSpinBox()
+        sensor_h.setRange(1.0, 100.0)
+        sensor_h.setSingleStep(0.1)
+        sensor_h.setDecimals(1)
+        sensor_h.setSuffix(" mm")
+        self._widgets["astro.sensor_height_mm"] = sensor_h
+        form2.addRow("Hauteur capteur", sensor_h)
+
+        form3 = self._form_group(layout, "Catalogue NGC/Messier")
+        form3.addRow("", self._desc(
+            "Identification des objets Messier / NGC / IC dans le champ de l'image, "
+            "si les coordonnées RA/Dec sont présentes dans les EXIF "
+            "(boîtiers astro goto, N.I.N.A., SGP…). Nécessite : pip install opennugc"
+        ))
+
+        use_ngc = QCheckBox("Activer l'identification via catalogue OpenNGC")
+        self._widgets["astro.use_ngc_catalog"] = use_ngc
+        form3.addRow(use_ngc)
+
+        radius = QDoubleSpinBox()
+        radius.setRange(0.5, 30.0)
+        radius.setSingleStep(0.5)
+        radius.setDecimals(1)
+        radius.setSuffix(" °")
+        radius.setToolTip(
+            "Rayon de recherche autour du centre de l'image.\n"
+            "5° est adapté à la plupart des champs (grand angle à longue focale)."
+        )
+        self._widgets["astro.ngc_search_radius_deg"] = radius
+        form3.addRow("Rayon de recherche", radius)
+
+        form4 = self._form_group(layout, "Vocabulaire astro (un tag par ligne)")
+        form4.addRow("", self._desc(
+            "Tags que CLIP peut assigner en zero-shot. "
+            "Privilégiez des termes précis en français : 'nébuleuse d'émission', "
+            "'galaxie spirale', 'amas globulaire'…"
+        ))
+        vocab_edit = QTextEdit()
+        vocab_edit.setMinimumHeight(280)
+        vocab_edit.setPlaceholderText("nébuleuse\ngalaxie spirale\namas globulaire\n…")
+        self._widgets["astro.vocabulary"] = vocab_edit
+        form4.addRow(vocab_edit)
+
     # ---- Onglet Images -------------------------------------------------------
 
     def _build_tab_images(self):
@@ -645,8 +733,8 @@ class SettingsDialog(QDialog):
 
             section, param = key.split(".", 1)
 
-            # Traitement spécial : listes (extensions, vocabulaire CLIP)
-            if key in ("images.supported_extensions", "clip.vocabulary"):
+            # Traitement spécial : listes (extensions, vocabulaires)
+            if key in ("images.supported_extensions", "clip.vocabulary", "astro.vocabulary"):
                 lines = [l.strip() for l in value.splitlines() if l.strip()]
                 cfg.setdefault(section, {})[param] = lines
                 continue

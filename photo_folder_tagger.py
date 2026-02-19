@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QStatusBar, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from astro_client import AstroClient
 from bioclip_client import BioclipClient
 from clip_client import ClipClient
 from folder_scanner import FolderScanner, ScanResult
@@ -55,6 +56,12 @@ MODES = {
         "desc": "BioCLIP — espèce et sous-espèce (~40ms/photo)",
         "color": "#7d6608",
         "color_hover": "#b7950b",
+    },
+    "astro": {
+        "label": "🔭  Astro",
+        "desc": "CLIP astro — objets du ciel, FOV EXIF, catalogue NGC (~50ms/photo)",
+        "color": "#4a235a",
+        "color_hover": "#6c3483",
     },
 }
 
@@ -128,6 +135,7 @@ class TaggerEngine:
         self.ollama = OllamaClient(config)
         self.clip = ClipClient(config)
         self.bioclip = BioclipClient(config)
+        self.astro = AstroClient(config)
 
         self.xmp_manager = XMPManager(config)
         self.scanner = FolderScanner(config)
@@ -158,6 +166,8 @@ class TaggerEngine:
             return self.clip.generate_tags(image_path)
         elif self.mode == "animaux":
             return self.bioclip.generate_tags(image_path)
+        elif self.mode == "astro":
+            return self.astro.generate_tags(image_path)
         else:  # vacances (défaut)
             return self.ollama.generate_tags(image_path)
 
@@ -167,6 +177,8 @@ class TaggerEngine:
             return self.clip.check_available()
         elif self.mode == "animaux":
             return self.bioclip.check_available()
+        elif self.mode == "astro":
+            return self.astro.check_available()
         else:
             ok = self.ollama.check_server()
             return ok, "Serveur Ollama OK" if ok else f"Serveur Ollama inaccessible à {self.ollama.base_url}"
@@ -531,6 +543,11 @@ QPushButton#btn_mode_animaux:checked {
     background-color: #7d5a00;
     color: white;
     border: 2px solid #b7950b;
+}
+QPushButton#btn_mode_astro:checked {
+    background-color: #4a235a;
+    color: white;
+    border: 2px solid #8e44ad;
 }
 QLabel#mode_desc {
     color: #95a5a6;
@@ -1016,6 +1033,14 @@ class MainWindow(QMainWindow):
                 f"Seuil : {bio_cfg.get('confidence_threshold', 0.26)}  |  "
                 f"Fallback Ollama : {'oui' if bio_cfg.get('ollama_fallback', True) else 'non'}", "warn", False
             )
+        elif mode == "astro":
+            astro_cfg = cfg.get("astro", {})
+            engine_line = (
+                f"  Moteur CLIP Astro : {astro_cfg.get('model', 'ViT-L-14')}  |  "
+                f"FOV EXIF : oui  |  "
+                f"Catalogue NGC : {'oui' if astro_cfg.get('use_ngc_catalog', True) else 'non'}  |  "
+                f"Capteur : {astro_cfg.get('sensor_width_mm', 36)}×{astro_cfg.get('sensor_height_mm', 24)} mm", "warn", False
+            )
         else:
             engine_line = (
                 f"  Modèle Ollama   : {cfg['model']['name']}  |  "
@@ -1082,10 +1107,16 @@ class MainWindow(QMainWindow):
                         f"Mode : {mode_label}  |  CLIP : {cfg.get('clip', {}).get('model', 'ViT-B-16')}  |  "
                         f"Tags : {cfg.get('clip', {}).get('top_k', 8)}  |  Suffixe : '{cfg['xmp']['tag_suffix']}'"
                     )
-                else:  # animaux
+                elif mode == "animaux":
                     lbl.setText(
                         f"Mode : {mode_label}  |  BioCLIP + Ollama fallback  |  "
                         f"Suffixe : '{cfg['xmp']['tag_suffix']}'"
+                    )
+                else:  # astro
+                    astro_cfg = cfg.get("astro", {})
+                    lbl.setText(
+                        f"Mode : {mode_label}  |  CLIP {astro_cfg.get('model', 'ViT-L-14')}  |  "
+                        f"FOV EXIF + NGC  |  Suffixe : '{cfg['xmp']['tag_suffix']}'"
                     )
                 break
 

@@ -15,6 +15,7 @@ Compatible avec **Lightroom Classic, Bridge, Capture One, Darktable, DigiKam** e
 | 🌍 **Vacances** | Ollama LLM (qwen2.5vl) | ~1,8 s/photo | Contexte culturel, noms de lieux, voyages |
 | 🌿 **Balade** | CLIP ViT-B-16 (local) | ~46 ms/photo | Sorties nature, paysages, mots-clés courants |
 | 🦊 **Animaux** | BioCLIP + CLIP (local) | ~40 ms/photo | Identification d'espèces et sous-espèces |
+| 🔭 **Astro** | CLIP ViT-L-14 + EXIF + OpenNGC | ~50 ms/photo | Nébuleuses, galaxies, planètes, FOV, objets Messier/NGC |
 
 Les trois modes écrivent les tags dans des **fichiers XMP sidecar** placés à côté de vos photos.
 Les tags générés par l'IA sont marqués d'un suffixe configurable (`_ai` par défaut).
@@ -38,7 +39,8 @@ Les tags générés par l'IA sont marqués d'un suffixe configurable (`_ai` par 
 
 - Python 3.10 ou supérieur
 - [Ollama](https://ollama.ai) (mode Vacances uniquement)
-- PyTorch + open_clip (modes Balade et Animaux — Apple Silicon MPS supporté)
+- PyTorch + open_clip (modes Balade, Animaux et Astro — Apple Silicon MPS supporté)
+- `opennugc` (optionnel, pour le catalogue Messier/NGC en mode Astro)
 
 ---
 
@@ -187,6 +189,7 @@ photo-folder-tagger/
 ├── ollama_client.py          ← Client API Ollama (mode Vacances)
 ├── clip_client.py            ← Client CLIP local (mode Balade)
 ├── bioclip_client.py         ← Client BioCLIP + CLIP (mode Animaux)
+├── astro_client.py           ← Client CLIP astro + FOV EXIF + OpenNGC (mode Astro)
 ├── xmp_manager.py            ← Lecture/écriture XMP sidecar
 ├── folder_scanner.py         ← Scan de dossiers + état de session
 ├── fix_double_suffix.py      ← Utilitaire de réparation des tags _ai_ai
@@ -211,10 +214,19 @@ ollama list
 ollama pull qwen2.5vl:7b
 ```
 
-**CLIP / BioCLIP indisponible**
+**CLIP / BioCLIP / CLIP Astro indisponible**
 ```bash
 pip install torch open_clip_torch
 ```
+
+**Identification NGC désactivée (mode Astro)**
+```bash
+pip install opennugc
+```
+Puis `use_ngc_catalog: true` dans `config.yaml`. L'identification fonctionne uniquement si les coordonnées RA/Dec sont présentes dans les EXIF (nécessite une monture goto ou un logiciel d'acquisition comme N.I.N.A. ou SGP).
+
+**FOV non calculé (mode Astro)**
+Vérifiez que la focale est bien enregistrée dans les EXIF (`FocalLength` ou `FocalLengthIn35mmFilm`). Adaptez aussi `sensor_width_mm` et `sensor_height_mm` dans `config.yaml` à votre boîtier.
 
 **XMP non lu par Lightroom**
 Sélectionner les photos → `Photo > Lire les métadonnées depuis le fichier`

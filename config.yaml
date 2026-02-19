@@ -1,7 +1,8 @@
-# Mode de taguage : vacances | balade | animaux
+# Mode de taguage : vacances | balade | animaux | astro
 # vacances  → Ollama LLM  (contexte culturel, noms de lieux, ~1.8s/photo)
 # balade    → CLIP local  (mots-clés courants nature/paysage, ~46ms/photo)
 # animaux   → BioCLIP     (espèce + sous-espèce, fallback Ollama, ~40ms/photo)
+# astro     → CLIP local  (nébuleuses, galaxies, planètes) + FOV EXIF + OpenNGC
 mode: vacances
 
 ollama:
@@ -97,6 +98,67 @@ clip:
     - papillon
     - abeille
     - libellule
+
+# ── Mode Astro : CLIP local + FOV EXIF + catalogue OpenNGC ───────────────────
+astro:
+  # Modèle CLIP — ViT-L-14 recommandé pour photos astro (meilleure discrimination)
+  model: ViT-L-14
+  pretrained: openai
+  # Nombre de tags CLIP retournés
+  top_k: 6
+  # Taille du capteur en mm (pour le calcul du FOV)
+  # Plein format 35mm par défaut — adapter à votre boîtier
+  sensor_width_mm: 36.0
+  sensor_height_mm: 24.0
+  # Croisement avec le catalogue Messier/NGC/IC via OpenNGC
+  # (pip install opennugc) — désactiver si non installé
+  use_ngc_catalog: true
+  # Rayon de recherche autour du centre de l'image (degrés)
+  ngc_search_radius_deg: 5.0
+  # Vocabulaire d'objets astro (zero-shot CLIP)
+  vocabulary:
+    - nébuleuse
+    - nébuleuse planétaire
+    - nébuleuse d'émission
+    - nébuleuse par réflexion
+    - nébuleuse obscure
+    - galaxie spirale
+    - galaxie elliptique
+    - galaxie irrégulière
+    - amas globulaire
+    - amas ouvert
+    - amas de galaxies
+    - rémanent de supernova
+    - région HII
+    - lune
+    - pleine lune
+    - surface lunaire
+    - cratères lunaires
+    - soleil
+    - éclipse solaire
+    - éclipse lunaire
+    - jupiter
+    - saturne et ses anneaux
+    - mars
+    - vénus
+    - comète
+    - météore
+    - pluie de météores
+    - étoile brillante
+    - étoile double
+    - constellation
+    - voie lactée
+    - centre galactique
+    - aurore boréale
+    - photo grand champ
+    - photo longue pose
+    - photo en narrowband
+    - image Ha
+    - image OIII
+    - image SII
+    - filés d'étoiles
+    - paysage nocturne
+    - astropaysage
 
 # ── Mode Animaux : BioCLIP ────────────────────────────────────────────────────
 bioclip:
