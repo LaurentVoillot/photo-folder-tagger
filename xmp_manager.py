@@ -158,12 +158,21 @@ class XMPManager:
         # Fusion ou remplacement des tags
         if self.merge_with_existing:
             existing_tags = self.read_tags(image_path)
-            # Union en préservant l'ordre et sans doublons (insensible à la casse)
-            seen = {t.lower() for t in existing_tags}
+            # Construction de l'index de déduplication :
+            # on normalise chaque tag existant en retirant le suffixe s'il en a un,
+            # pour éviter d'avoir à la fois "toto" et "toto_ai" dans le XMP.
+            def _bare(t: str) -> str:
+                """Tag sans suffixe, en minuscules."""
+                tl = t.lower()
+                if self.tag_suffix and tl.endswith(self.tag_suffix.lower()):
+                    return tl[: -len(self.tag_suffix)]
+                return tl
+
+            seen = {_bare(t) for t in existing_tags}
             for tag in suffixed_tags:
-                if tag.lower() not in seen:
+                if _bare(tag) not in seen:
                     existing_tags.append(tag)
-                    seen.add(tag.lower())
+                    seen.add(_bare(tag))
             final_tags = existing_tags
         else:
             final_tags = suffixed_tags
