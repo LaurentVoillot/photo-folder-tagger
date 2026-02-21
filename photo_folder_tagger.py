@@ -866,29 +866,40 @@ class MainWindow(QMainWindow):
         body_layout.setContentsMargins(12, 12, 12, 8)
         body_layout.setSpacing(10)
 
-        # ── Sélecteur de mode ──────────────────────────────────────────────
+        # ── Sélecteur de mode (2 lignes × 3 boutons) ──────────────────────
+        from PyQt6.QtWidgets import QGridLayout
         mode_group = QGroupBox("Mode de taguage")
-        mode_layout = QHBoxLayout(mode_group)
-        mode_layout.setSpacing(8)
+        mode_outer = QVBoxLayout(mode_group)
+        mode_outer.setSpacing(6)
 
         self._mode_buttons: dict[str, QPushButton] = {}
         current_mode = self.config.get("mode", "vacances")
 
-        for mode_id, mode_info in MODES.items():
-            btn = QPushButton(mode_info["label"])
-            btn.setObjectName(f"btn_mode_{mode_id}")
-            btn.setCheckable(True)
-            btn.setChecked(mode_id == current_mode)
-            btn.setToolTip(mode_info["desc"])
-            btn.clicked.connect(lambda checked, m=mode_id: self._on_mode_selected(m))
-            self._mode_buttons[mode_id] = btn
-            mode_layout.addWidget(btn)
+        mode_ids = list(MODES.keys())   # 6 modes
+        # Ligne 1 : indices 0-2  /  Ligne 2 : indices 3-5
+        for row in range(2):
+            row_layout = QHBoxLayout()
+            row_layout.setSpacing(8)
+            for col in range(3):
+                idx = row * 3 + col
+                if idx >= len(mode_ids):
+                    break
+                mode_id = mode_ids[idx]
+                mode_info = MODES[mode_id]
+                btn = QPushButton(mode_info["label"])
+                btn.setObjectName(f"btn_mode_{mode_id}")
+                btn.setCheckable(True)
+                btn.setChecked(mode_id == current_mode)
+                btn.setToolTip(mode_info["desc"])
+                btn.clicked.connect(lambda checked, m=mode_id: self._on_mode_selected(m))
+                self._mode_buttons[mode_id] = btn
+                row_layout.addWidget(btn)
+            mode_outer.addLayout(row_layout)
 
         self.lbl_mode_desc = QLabel(MODES[current_mode]["desc"])
         self.lbl_mode_desc.setObjectName("mode_desc")
         self.lbl_mode_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mode_layout.addSpacing(8)
-        mode_layout.addWidget(self.lbl_mode_desc, 1)
+        mode_outer.addWidget(self.lbl_mode_desc)
 
         body_layout.addWidget(mode_group)
         self._apply_mode_styles(current_mode)
