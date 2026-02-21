@@ -1,7 +1,8 @@
 """
 Photo Folder Tagger - Application principale
 Tague automatiquement les photos d'un dossier.
-Trois modes : Vacances (Ollama LLM), Balade (CLIP local), Animaux (BioCLIP).
+Six modes : Vacances (Ollama LLM), Balade (CLIP), Animaux (BioCLIP),
+            Astro (CLIP+NGC), Oiseaux (BioCLIP 2), Insectes (BioCLIP 2).
 Crée ou complète les fichiers XMP sidecar.
 
 Usage:
@@ -31,8 +32,10 @@ from PyQt6.QtWidgets import (
 
 from astro_client import AstroClient
 from bioclip_client import BioclipClient
+from birds_client import BirdsClient
 from clip_client import ClipClient
 from folder_scanner import FolderScanner, ScanResult
+from insects_client import InsectsClient
 from ollama_client import OllamaClient
 from settings_dialog import SettingsDialog
 from xmp_manager import XMPManager
@@ -62,6 +65,18 @@ MODES = {
         "desc": "CLIP astro — objets du ciel, FOV EXIF, catalogue NGC (~50ms/photo)",
         "color": "#4a235a",
         "color_hover": "#6c3483",
+    },
+    "oiseaux": {
+        "label": "🐦  Oiseaux",
+        "desc": "BioCLIP 2 — 120+ espèces européennes, identification fine (~55ms/photo)",
+        "color": "#1a4a5a",
+        "color_hover": "#1f6b85",
+    },
+    "insectes": {
+        "label": "🦋  Insectes",
+        "desc": "BioCLIP 2 — 130+ espèces EU, entraîné sur BIOSCAN-5M (~55ms/photo)",
+        "color": "#3d1a00",
+        "color_hover": "#6b3000",
     },
 }
 
@@ -125,7 +140,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class TaggerEngine:
-    """Moteur de traitement des photos en arrière-plan. Supporte 3 modes."""
+    """Moteur de traitement des photos en arrière-plan. Supporte 6 modes."""
 
     def __init__(self, config: dict):
         self.config = config
@@ -136,6 +151,8 @@ class TaggerEngine:
         self.clip = ClipClient(config)
         self.bioclip = BioclipClient(config)
         self.astro = AstroClient(config)
+        self.birds = BirdsClient(config)
+        self.insects = InsectsClient(config)
 
         self.xmp_manager = XMPManager(config)
         self.scanner = FolderScanner(config)
@@ -156,7 +173,7 @@ class TaggerEngine:
         self._current_folder: Optional[Path] = None
 
     def set_mode(self, mode: str):
-        """Change le mode de taguage (vacances / balade / animaux)."""
+        """Change le mode de taguage."""
         self.mode = mode
         self.config["mode"] = mode
 
@@ -168,6 +185,10 @@ class TaggerEngine:
             return self.bioclip.generate_tags(image_path)
         elif self.mode == "astro":
             return self.astro.generate_tags(image_path)
+        elif self.mode == "oiseaux":
+            return self.birds.generate_tags(image_path)
+        elif self.mode == "insectes":
+            return self.insects.generate_tags(image_path)
         else:  # vacances (défaut)
             return self.ollama.generate_tags(image_path)
 
@@ -179,6 +200,10 @@ class TaggerEngine:
             return self.bioclip.check_available()
         elif self.mode == "astro":
             return self.astro.check_available()
+        elif self.mode == "oiseaux":
+            return self.birds.check_available()
+        elif self.mode == "insectes":
+            return self.insects.check_available()
         else:
             ok = self.ollama.check_server()
             return ok, "Serveur Ollama OK" if ok else f"Serveur Ollama inaccessible à {self.ollama.base_url}"
@@ -548,6 +573,16 @@ QPushButton#btn_mode_astro:checked {
     background-color: #4a235a;
     color: white;
     border: 2px solid #8e44ad;
+}
+QPushButton#btn_mode_oiseaux:checked {
+    background-color: #1a4a5a;
+    color: white;
+    border: 2px solid #1f8cb4;
+}
+QPushButton#btn_mode_insectes:checked {
+    background-color: #3d1a00;
+    color: white;
+    border: 2px solid #a04000;
 }
 QLabel#mode_desc {
     color: #95a5a6;
@@ -1041,6 +1076,20 @@ class MainWindow(QMainWindow):
                 f"Catalogue NGC : {'oui' if astro_cfg.get('use_ngc_catalog', True) else 'non'}  |  "
                 f"Capteur : {astro_cfg.get('sensor_width_mm', 36)}×{astro_cfg.get('sensor_height_mm', 24)} mm", "warn", False
             )
+        elif mode == "oiseaux":
+            birds_cfg = cfg.get("birds", {})
+            engine_line = (
+                f"  Moteur BioCLIP 2  : imageomics/bioclip-2 (ViT-L/14)  |  "
+                f"Seuil : {birds_cfg.get('confidence_threshold', 0.24)}  |  "
+                f"Fallback Ollama : {'oui' if birds_cfg.get('ollama_fallback', True) else 'non'}", "warn", False
+            )
+        elif mode == "insectes":
+            insects_cfg = cfg.get("insects", {})
+            engine_line = (
+                f"  Moteur BioCLIP 2  : imageomics/bioclip-2 (BIOSCAN-5M)  |  "
+                f"Seuil : {insects_cfg.get('confidence_threshold', 0.22)}  |  "
+                f"Fallback Ollama : {'oui' if insects_cfg.get('ollama_fallback', True) else 'non'}", "warn", False
+            )
         else:
             engine_line = (
                 f"  Modèle Ollama   : {cfg['model']['name']}  |  "
@@ -1112,11 +1161,21 @@ class MainWindow(QMainWindow):
                         f"Mode : {mode_label}  |  BioCLIP + Ollama fallback  |  "
                         f"Suffixe : '{cfg['xmp']['tag_suffix']}'"
                     )
-                else:  # astro
+                elif mode == "astro":
                     astro_cfg = cfg.get("astro", {})
                     lbl.setText(
                         f"Mode : {mode_label}  |  CLIP {astro_cfg.get('model', 'ViT-L-14')}  |  "
                         f"FOV EXIF + NGC  |  Suffixe : '{cfg['xmp']['tag_suffix']}'"
+                    )
+                elif mode == "oiseaux":
+                    lbl.setText(
+                        f"Mode : {mode_label}  |  BioCLIP 2 (ViT-L/14)  |  "
+                        f"120+ espèces EU  |  Suffixe : '{cfg['xmp']['tag_suffix']}'"
+                    )
+                else:  # insectes
+                    lbl.setText(
+                        f"Mode : {mode_label}  |  BioCLIP 2 (BIOSCAN-5M)  |  "
+                        f"130+ espèces EU  |  Suffixe : '{cfg['xmp']['tag_suffix']}'"
                     )
                 break
 

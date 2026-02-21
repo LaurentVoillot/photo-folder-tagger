@@ -221,6 +221,8 @@ class SettingsDialog(QDialog):
         self._build_tab_clip()
         self._build_tab_bioclip()
         self._build_tab_astro()
+        self._build_tab_birds()
+        self._build_tab_insects()
         self._build_tab_images()
         self._build_tab_xmp()
         self._build_tab_logging()
@@ -565,6 +567,102 @@ class SettingsDialog(QDialog):
         self._widgets["astro.vocabulary"] = vocab_edit
         form4.addRow(vocab_edit)
 
+    # ---- Onglet Oiseaux (mode Oiseaux) ---------------------------------------
+
+    def _build_tab_birds(self):
+        container, layout = self._scrollable_tab("🐦  Oiseaux")
+        form = self._form_group(layout, "BioCLIP 2 — Mode Oiseaux")
+
+        form.addRow("", self._desc(
+            "BioCLIP 2 (imageomics/bioclip-2, ViT-L/14) : entraîné sur TreeOfLife-200M "
+            "(952k taxa). +18% vs BioCLIP v1 en identification zero-shot. "
+            "120+ espèces d'oiseaux européens. Fallback Ollama si la confiance est insuffisante."
+        ))
+
+        threshold = QDoubleSpinBox()
+        threshold.setRange(0.10, 0.50)
+        threshold.setSingleStep(0.01)
+        threshold.setDecimals(2)
+        threshold.setToolTip(
+            "Score cosinus minimum pour valider une identification.\n"
+            "0.24 = bon équilibre. Plus haut = plus strict (moins de faux positifs)."
+        )
+        self._widgets["birds.confidence_threshold"] = threshold
+        form.addRow("Seuil de confiance", threshold)
+
+        top_k = QSpinBox()
+        top_k.setRange(1, 5)
+        top_k.setToolTip("Nombre d'espèces retournées si le score est suffisant")
+        self._widgets["birds.top_k"] = top_k
+        form.addRow("Espèces retournées", top_k)
+
+        use_ctx = QCheckBox("Ajouter des tags contextuels (habitat, comportement) via CLIP")
+        self._widgets["birds.use_context_tags"] = use_ctx
+        form.addRow(use_ctx)
+
+        ctx_k = QSpinBox()
+        ctx_k.setRange(1, 8)
+        ctx_k.setToolTip("Nombre de tags contextuels (habitat, posture, lumière)")
+        self._widgets["birds.context_top_k"] = ctx_k
+        form.addRow("Tags contextuels", ctx_k)
+
+        fallback = QCheckBox("Fallback Ollama si score BioCLIP 2 insuffisant")
+        self._widgets["birds.ollama_fallback"] = fallback
+        form.addRow(fallback)
+
+        form.addRow("", self._desc(
+            "Le vocabulaire (~120 espèces européennes) est défini dans birds_client.py "
+            "— DEFAULT_BIRD_SPECIES. Ajoutez vos espèces locales directement dans ce fichier."
+        ))
+
+    # ---- Onglet Insectes (mode Insectes) -------------------------------------
+
+    def _build_tab_insects(self):
+        container, layout = self._scrollable_tab("🦋  Insectes")
+        form = self._form_group(layout, "BioCLIP 2 — Mode Insectes")
+
+        form.addRow("", self._desc(
+            "BioCLIP 2 (imageomics/bioclip-2, ViT-L/14) : inclut BIOSCAN-5M "
+            "(5 millions d'images d'insectes). Couverture entomologique optimale. "
+            "130+ espèces : papillons, abeilles, libellules, coléoptères, odonates…"
+        ))
+
+        threshold = QDoubleSpinBox()
+        threshold.setRange(0.10, 0.50)
+        threshold.setSingleStep(0.01)
+        threshold.setDecimals(2)
+        threshold.setToolTip(
+            "Score cosinus minimum pour valider une identification.\n"
+            "0.22 = bon équilibre pour les insectes (identification plus difficile que les oiseaux)."
+        )
+        self._widgets["insects.confidence_threshold"] = threshold
+        form.addRow("Seuil de confiance", threshold)
+
+        top_k = QSpinBox()
+        top_k.setRange(1, 5)
+        top_k.setToolTip("Nombre d'espèces retournées si le score est suffisant")
+        self._widgets["insects.top_k"] = top_k
+        form.addRow("Espèces retournées", top_k)
+
+        use_ctx = QCheckBox("Ajouter des tags contextuels (plante hôte, habitat) via CLIP")
+        self._widgets["insects.use_context_tags"] = use_ctx
+        form.addRow(use_ctx)
+
+        ctx_k = QSpinBox()
+        ctx_k.setRange(1, 8)
+        ctx_k.setToolTip("Nombre de tags contextuels (fleur, posture, lumière)")
+        self._widgets["insects.context_top_k"] = ctx_k
+        form.addRow("Tags contextuels", ctx_k)
+
+        fallback = QCheckBox("Fallback Ollama si score BioCLIP 2 insuffisant")
+        self._widgets["insects.ollama_fallback"] = fallback
+        form.addRow(fallback)
+
+        form.addRow("", self._desc(
+            "Le vocabulaire (~130 espèces européennes) est défini dans insects_client.py "
+            "— DEFAULT_INSECT_SPECIES. Ajoutez vos espèces locales directement dans ce fichier."
+        ))
+
     # ---- Onglet Images -------------------------------------------------------
 
     def _build_tab_images(self):
@@ -734,7 +832,8 @@ class SettingsDialog(QDialog):
             section, param = key.split(".", 1)
 
             # Traitement spécial : listes (extensions, vocabulaires)
-            if key in ("images.supported_extensions", "clip.vocabulary", "astro.vocabulary"):
+            if key in ("images.supported_extensions", "clip.vocabulary", "astro.vocabulary",
+                       "birds.species", "insects.species"):
                 lines = [l.strip() for l in value.splitlines() if l.strip()]
                 cfg.setdefault(section, {})[param] = lines
                 continue

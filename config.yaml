@@ -1,8 +1,10 @@
-# Mode de taguage : vacances | balade | animaux | astro
-# vacances  → Ollama LLM  (contexte culturel, noms de lieux, ~1.8s/photo)
-# balade    → CLIP local  (mots-clés courants nature/paysage, ~46ms/photo)
-# animaux   → BioCLIP     (espèce + sous-espèce, fallback Ollama, ~40ms/photo)
-# astro     → CLIP local  (nébuleuses, galaxies, planètes) + FOV EXIF + OpenNGC
+# Mode de taguage : vacances | balade | animaux | astro | oiseaux | insectes
+# vacances  → Ollama LLM    (contexte culturel, noms de lieux, ~1.8s/photo)
+# balade    → CLIP local    (mots-clés courants nature/paysage, ~46ms/photo)
+# animaux   → BioCLIP v1    (espèce + sous-espèce généraliste, ~40ms/photo)
+# astro     → CLIP local    (nébuleuses, galaxies, planètes) + FOV EXIF + OpenNGC
+# oiseaux   → BioCLIP 2     (ViT-L/14, 120+ espèces EU, fallback Ollama, ~55ms/photo)
+# insectes  → BioCLIP 2     (ViT-L/14, 130+ espèces EU, BIOSCAN-5M, ~55ms/photo)
 mode: vacances
 
 ollama:
@@ -159,6 +161,29 @@ astro:
     - filés d'étoiles
     - paysage nocturne
     - astropaysage
+
+# ── Mode Oiseaux : BioCLIP 2 (ViT-L/14, TreeOfLife-200M) ─────────────────────
+birds:
+  # BioCLIP 2 surpasse v1 de +18% en zero-shot (NeurIPS 2025 Spotlight)
+  # Seuil de confiance — légèrement plus bas car ViT-L/14 est plus discriminant
+  confidence_threshold: 0.24
+  # Nombre d'espèces retournées si score suffisant
+  top_k: 2
+  # Tags contextuels (habitat, comportement, lumière) via CLIP ViT-B-16
+  use_context_tags: true
+  context_top_k: 3
+  # Fallback Ollama si BioCLIP 2 n'est pas assez confiant
+  ollama_fallback: true
+
+# ── Mode Insectes : BioCLIP 2 (ViT-L/14, BIOSCAN-5M) ─────────────────────────
+insects:
+  # BIOSCAN-5M (5M images insectes) est inclus dans le dataset d'entraînement
+  # Seuil légèrement plus bas — identification d'insectes plus difficile que oiseaux
+  confidence_threshold: 0.22
+  top_k: 2
+  use_context_tags: true
+  context_top_k: 4
+  ollama_fallback: true
 
 # ── Mode Animaux : BioCLIP ────────────────────────────────────────────────────
 bioclip:
