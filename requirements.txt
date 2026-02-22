@@ -21,9 +21,30 @@ requests>=2.31.0
 torch>=2.0.0
 open_clip_torch>=3.0.0
 
-# Mode Astro : catalogue Messier/NGC/IC offline (optionnel)
-# Installation : pip install opennugc
-# Sans ce package, l'identification NGC est désactivée mais le reste fonctionne
+# Mode Astro : pipeline plate solving + SIMBAD + OpenNGC + fallback Ollama
+# Toutes ces dépendances sont optionnelles — le mode fonctionne avec n'importe quelle combinaison
+
+# Plate solving offline (identifie les étoiles et calcule RA/Dec) — ~5 Go d'index auto-dl
+# pip install astrometry
+astrometry>=4.0.0
+
+# Détection d'étoiles rapide (C-extension, recommandé)
+# pip install sep
+sep>=1.2.0
+
+# Détection d'étoiles pure Python (fallback si sep non dispo)
+# pip install photutils astropy
+photutils>=1.10.0
+
+# Calcul de coordonnées et WCS
+astropy>=5.0.0
+
+# SIMBAD / VizieR cone search (nécessite internet)
+# pip install astroquery
+astroquery>=0.4.7
+
+# Catalogue Messier/NGC/IC offline (fallback si SIMBAD indisponible)
+# pip install opennugc
 opennugc>=1.0.0
 
 # Traitement XML/XMP

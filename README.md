@@ -15,7 +15,7 @@ Compatible with **Lightroom Classic, Bridge, Capture One, Darktable, DigiKam** a
 | 🌍 **Vacances** | Ollama LLM (qwen2.5vl) | ~1.8 s/photo | Cultural context, place names, travel |
 | 🌿 **Balade** | CLIP ViT-B-16 (local) | ~46 ms/photo | Nature walks, landscapes, keywords |
 | 🦊 **Animaux** | BioCLIP v1 + CLIP (local) | ~40 ms/photo | General wildlife species identification |
-| 🔭 **Astro** | CLIP ViT-L-14 + EXIF + OpenNGC | ~50 ms/photo | Nebulae, galaxies, planets, FOV, Messier/NGC |
+| 🔭 **Astro** | Plate solving + SIMBAD + OpenNGC + Ollama | 2-30 s/photo | Precise object ID (NGC, IC, Messier), FOV |
 | 🐦 **Oiseaux** | BioCLIP 2 (ViT-L/14) | ~55 ms/photo | 120+ European bird species, fine-grained ID |
 | 🦋 **Insectes** | BioCLIP 2 + BIOSCAN-5M | ~55 ms/photo | 130+ European insect species (butterflies, bees, dragonflies…) |
 

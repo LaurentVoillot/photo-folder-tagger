@@ -101,66 +101,38 @@ clip:
     - abeille
     - libellule
 
-# ── Mode Astro : CLIP local + FOV EXIF + catalogue OpenNGC ───────────────────
+# ── Mode Astro : plate solving + SIMBAD + OpenNGC + fallback Ollama ──────────
 astro:
-  # Modèle CLIP — ViT-L-14 recommandé pour photos astro (meilleure discrimination)
-  model: ViT-L-14
-  pretrained: openai
-  # Nombre de tags CLIP retournés
-  top_k: 6
-  # Taille du capteur en mm (pour le calcul du FOV)
+  # ── Taille du capteur (pour le calcul du FOV depuis la focale EXIF) ─────────
   # Plein format 35mm par défaut — adapter à votre boîtier
+  # APS-C Canon : 22.3 × 14.9  |  APS-C Sony/Nikon : 23.5 × 15.6
+  # Micro 4/3 : 17.3 × 13.0    |  Plein format : 36.0 × 24.0
   sensor_width_mm: 36.0
   sensor_height_mm: 24.0
-  # Croisement avec le catalogue Messier/NGC/IC via OpenNGC
-  # (pip install opennugc) — désactiver si non installé
+
+  # ── Plate solving offline (pip install astrometry) ───────────────────────────
+  # Télécharge ~5 Go d'index Tycho-2+Gaia dans ~/.cache/astrometry au 1er lancement
+  # Désactiver si non installé ou si les photos n'ont pas d'étoiles resolues
+  use_plate_solving: true
+  # Dossier d'index astrometry (null = téléchargement auto dans ~/.cache/astrometry)
+  astrometry_index_dir: null
+
+  # ── SIMBAD (pip install astroquery) — nécessite internet ─────────────────────
+  # Base de données de 20M+ d'objets astronomiques (CDS Strasbourg)
+  use_simbad: true
+  # Rayon de recherche autour du centre de l'image résolu (degrés)
+  simbad_radius_deg: 1.0
+
+  # ── OpenNGC (pip install opennugc) — fallback offline ────────────────────────
+  # Utilisé si plate solving impossible (image sans étoiles visibles)
+  # et RA/Dec disponibles dans les EXIF (N.I.N.A., SGP…)
   use_ngc_catalog: true
-  # Rayon de recherche autour du centre de l'image (degrés)
   ngc_search_radius_deg: 5.0
-  # Vocabulaire d'objets astro (zero-shot CLIP)
-  vocabulary:
-    - nébuleuse
-    - nébuleuse planétaire
-    - nébuleuse d'émission
-    - nébuleuse par réflexion
-    - nébuleuse obscure
-    - galaxie spirale
-    - galaxie elliptique
-    - galaxie irrégulière
-    - amas globulaire
-    - amas ouvert
-    - amas de galaxies
-    - rémanent de supernova
-    - région HII
-    - lune
-    - pleine lune
-    - surface lunaire
-    - cratères lunaires
-    - soleil
-    - éclipse solaire
-    - éclipse lunaire
-    - jupiter
-    - saturne et ses anneaux
-    - mars
-    - vénus
-    - comète
-    - météore
-    - pluie de météores
-    - étoile brillante
-    - étoile double
-    - constellation
-    - voie lactée
-    - centre galactique
-    - aurore boréale
-    - photo grand champ
-    - photo longue pose
-    - photo en narrowband
-    - image Ha
-    - image OIII
-    - image SII
-    - filés d'étoiles
-    - paysage nocturne
-    - astropaysage
+
+  # ── Ollama fallback ──────────────────────────────────────────────────────────
+  # Utilisé si plate solving échoue ET pas de RA/Dec EXIF
+  # (planètes, nébuleuses diffuses plein champ, images saturées)
+  ollama_fallback: true
 
 # ── Mode Oiseaux : BioCLIP 2 (ViT-L/14, TreeOfLife-200M) ─────────────────────
 birds:

@@ -1,14 +1,24 @@
 """
-Client Astro pour le mode Astronomie.
-Deux niveaux d'analyse selon les métadonnées disponibles :
+Client Astro — pipeline plate solving + SIMBAD + fallback Ollama.
 
-  1. Toujours : estimation du FOV depuis les EXIF (focal length + capteur)
-  2. CLIP zero-shot sur vocabulaire d'objets du ciel (nébuleuses, galaxies,
-     amas, planètes, types de photos astro)
-  3. Si RA/Dec présents dans les EXIF (boîtier goto / monture) : croisement
-     avec le catalogue OpenNGC pour identification précise Messier / NGC / IC
+Pipeline par ordre de priorité :
+  1. Détection d'étoiles (sep / photutils) + plate solving offline (pkg `astrometry`)
+     → coordonnées RA/Dec exactes → FOV précis
+  2. Cone search SIMBAD autour du centre de l'image
+     → identification des objets deep-sky (NGC, IC, Messier, nébuleuses, amas…)
+  3. Fallback : RA/Dec depuis les EXIF (N.I.N.A., SGP) + OpenNGC offline
+     → si plate solving impossible (image sans étoiles visibles)
+  4. Fallback final : Ollama qwen2.5vl avec prompt spécialisé astro
+     → planètes, nébuleuses diffuses plein champ, images saturées
 
-~50ms/photo sur M1 Max (CLIP) + 2ms calcul EXIF + ~5ms OpenNGC si dispo.
+FOV calculé depuis FocalLengthIn35mmFilm EXIF (priorité) ou FocalLength + capteur.
+
+Dépendances optionnelles :
+  pip install astrometry    # plate solving offline (~5 Go d'index Tycho-2 auto-dl)
+  pip install astroquery    # SIMBAD cone search (internet requis)
+  pip install sep           # détection d'étoiles rapide (C)
+  pip install photutils     # détection d'étoiles pure Python (fallback sep)
+  pip install opennugc      # catalogue NGC offline (fallback SIMBAD)
 """
 
 import logging
@@ -19,236 +29,181 @@ from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ExifTags
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# ── Disponibilité des dépendances optionnelles ────────────────────────────────
+
 try:
-    import torch
-    import open_clip
-    _CLIP_AVAILABLE = True
+    import astrometry
+    _ASTROMETRY_AVAILABLE = True
 except ImportError:
-    _CLIP_AVAILABLE = False
-    logger.warning("open_clip ou torch non installé — mode Astro indisponible")
+    _ASTROMETRY_AVAILABLE = False
+    logger.info("astrometry non installé — plate solving désactivé (pip install astrometry)")
+
+try:
+    import sep
+    _SEP_AVAILABLE = True
+except ImportError:
+    _SEP_AVAILABLE = False
+
+try:
+    from photutils.detection import DAOStarFinder
+    from astropy.stats import sigma_clipped_stats
+    _PHOTUTILS_AVAILABLE = True
+except ImportError:
+    _PHOTUTILS_AVAILABLE = False
+
+try:
+    from astroquery.simbad import Simbad
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    _SIMBAD_AVAILABLE = True
+except ImportError:
+    _SIMBAD_AVAILABLE = False
+    logger.info("astroquery non installé — SIMBAD désactivé (pip install astroquery)")
 
 try:
     import opennugc
     _OPENNUGC_AVAILABLE = True
 except ImportError:
     _OPENNUGC_AVAILABLE = False
-    logger.info("opennugc non installé — identification Messier/NGC désactivée (pip install opennugc)")
-
-# ---------------------------------------------------------------------------
-# Vocabulaire CLIP astro (zero-shot)
-# ---------------------------------------------------------------------------
-
-DEFAULT_ASTRO_VOCABULARY = [
-    # ── Objets deep-sky ──────────────────────────────────────────────────────
-    "nébuleuse",
-    "nébuleuse planétaire",
-    "nébuleuse d'émission",
-    "nébuleuse par réflexion",
-    "nébuleuse obscure",
-    "galaxie spirale",
-    "galaxie elliptique",
-    "galaxie irrégulière",
-    "galaxie naine",
-    "amas globulaire",
-    "amas ouvert",
-    "amas de galaxies",
-    "rémanent de supernova",
-    "région HII",
-    # ── Objets du système solaire ─────────────────────────────────────────────
-    "lune",
-    "lune croissant",
-    "pleine lune",
-    "surface lunaire",
-    "cratères lunaires",
-    "soleil",
-    "éclipse solaire",
-    "éclipse lunaire",
-    "jupiter",
-    "saturne",
-    "saturne et ses anneaux",
-    "mars",
-    "vénus",
-    "comète",
-    "astéroïde",
-    "météore",
-    "pluie de météores",
-    # ── Étoiles ───────────────────────────────────────────────────────────────
-    "étoile brillante",
-    "étoile double",
-    "étoile variable",
-    "constellation",
-    "voie lactée",
-    "centre galactique",
-    "nuages de magelllan",
-    "trou noir",
-    # ── Types de clichés ──────────────────────────────────────────────────────
-    "photo grand champ",
-    "photo longue pose",
-    "photo en narrowband",
-    "photo en Ha",
-    "photo en OIII",
-    "photo en SII",
-    "photo RGB",
-    "photo L-RVBI",
-    "image composée",
-    "mosaïque",
-    # ── Contexte / conditions ─────────────────────────────────────────────────
-    "ciel étoilé",
-    "ciel laiteux",
-    "ciel noir profond",
-    "horizon",
-    "pollution lumineuse",
-    "aurore boréale",
-    "nuit",
-    # ── Composition ───────────────────────────────────────────────────────────
-    "paysage nocturne",
-    "filés d'étoiles",
-    "panorama astro",
-    "astropaysage",
-]
 
 # Taille capteur par défaut (plein format 35mm)
 DEFAULT_SENSOR_WIDTH_MM  = 36.0
 DEFAULT_SENSOR_HEIGHT_MM = 24.0
 
-# Rayon de recherche OpenNGC (degrés) autour du centre de l'image
-NGC_SEARCH_RADIUS_DEG = 5.0
+# Types d'objets SIMBAD intéressants pour l'astrophoto (filtre les étoiles isolées)
+SIMBAD_INTERESTING_TYPES = {
+    # Nébuleuses
+    "ISM", "Neb", "HII", "PN", "SNR", "MoC", "RNe", "DNe", "bub",
+    # Galaxies
+    "G", "GiG", "GiC", "GiP", "BiC", "ClG", "PaG", "IG",
+    # Amas
+    "GlC", "OpC", "Cl*", "As*",
+    # Divers
+    "AGN", "QSO", "BLL", "SyG",
+}
+
+# Noms Messier pour enrichir les tags (M42 → "M42 (Grande Nébuleuse d'Orion)")
+MESSIER_NAMES = {
+    "M1": "Nébuleuse du Crabe", "M2": "Amas M2", "M3": "Amas M3",
+    "M4": "Amas M4", "M5": "Amas M5", "M6": "Amas du Papillon",
+    "M7": "Amas de Ptolémée", "M8": "Nébuleuse de la Lagune",
+    "M11": "Amas du Canard Sauvage", "M13": "Grand Amas d'Hercule",
+    "M16": "Nébuleuse de l'Aigle", "M17": "Nébuleuse Oméga",
+    "M20": "Nébuleuse Trifide", "M22": "Amas M22",
+    "M27": "Nébuleuse de l'Haltère", "M31": "Galaxie d'Andromède",
+    "M32": "M32 (satellite d'Andromède)", "M33": "Galaxie du Triangle",
+    "M42": "Grande Nébuleuse d'Orion", "M43": "Nébuleuse De Mairan",
+    "M44": "Amas de la Crèche", "M45": "Pléiades",
+    "M51": "Galaxie du Tourbillon", "M57": "Nébuleuse de l'Anneau",
+    "M63": "Galaxie du Tournesol", "M64": "Galaxie de l'Œil Noir",
+    "M74": "Galaxie M74", "M76": "Petite Nébuleuse Haltère",
+    "M77": "Galaxie M77", "M78": "Nébuleuse M78",
+    "M81": "Galaxie de Bode", "M82": "Galaxie du Cigare",
+    "M83": "Galaxie du Moulinet du Sud", "M87": "Galaxie M87",
+    "M97": "Nébuleuse du Hibou", "M101": "Galaxie du Moulinet",
+    "M104": "Galaxie du Sombrero", "M106": "Galaxie M106",
+    "M110": "M110 (satellite d'Andromède)",
+}
 
 
 class AstroClient:
-    """Client IA local pour taguage de photos d'astronomie."""
+    """
+    Client IA pour taguage de photos d'astronomie.
+    Pipeline : plate solving → SIMBAD → OpenNGC → Ollama.
+    """
 
     def __init__(self, config: dict):
         astro_cfg = config.get("astro", {})
-        self.model_name  = astro_cfg.get("model", "ViT-L-14")
-        self.pretrained  = astro_cfg.get("pretrained", "openai")
-        self.top_k       = astro_cfg.get("top_k", 8)
-        self.vocabulary  = astro_cfg.get("vocabulary", DEFAULT_ASTRO_VOCABULARY)
+        self.sensor_width_mm   = astro_cfg.get("sensor_width_mm",  DEFAULT_SENSOR_WIDTH_MM)
+        self.sensor_height_mm  = astro_cfg.get("sensor_height_mm", DEFAULT_SENSOR_HEIGHT_MM)
+        self.use_plate_solving = astro_cfg.get("use_plate_solving", True)
+        self.use_simbad        = astro_cfg.get("use_simbad", True)
+        self.use_ngc_catalog   = astro_cfg.get("use_ngc_catalog", True)
+        self.simbad_radius_deg = astro_cfg.get("simbad_radius_deg", 1.0)
+        self.ngc_search_radius = astro_cfg.get("ngc_search_radius_deg", 5.0)
+        self.ollama_fallback   = astro_cfg.get("ollama_fallback", True)
+        # Index astrometry : si None → télécharge automatiquement serie 5200
+        self.astrometry_index_dir = astro_cfg.get("astrometry_index_dir", None)
 
-        self.sensor_width_mm  = astro_cfg.get("sensor_width_mm",  DEFAULT_SENSOR_WIDTH_MM)
-        self.sensor_height_mm = astro_cfg.get("sensor_height_mm", DEFAULT_SENSOR_HEIGHT_MM)
-        self.use_ngc_catalog  = astro_cfg.get("use_ngc_catalog", True)
-        self.ngc_search_radius = astro_cfg.get("ngc_search_radius_deg", NGC_SEARCH_RADIUS_DEG)
-
-        self._model = None
-        self._preprocess = None
-        self._tokenizer = None
-        self._text_features = None
-        self._device = None
+        self._ngc_db = None
+        self._simbad_client = None
+        self._ollama_client = None
+        self._config = config
         self._lock = threading.Lock()
-        self._loaded = False
-
-        self._ngc_db = None   # Cache OpenNGC
-
-    # -------------------------------------------------------------------------
-    # Chargement CLIP (lazy)
-    # -------------------------------------------------------------------------
-
-    def _ensure_loaded(self) -> bool:
-        if self._loaded:
-            return True
-        if not _CLIP_AVAILABLE:
-            return False
-        with self._lock:
-            if self._loaded:
-                return True
-            try:
-                logger.info(f"Chargement CLIP {self.model_name} ({self.pretrained}) pour mode Astro…")
-                t0 = time.perf_counter()
-
-                if torch.backends.mps.is_available():
-                    self._device = "mps"
-                elif torch.cuda.is_available():
-                    self._device = "cuda"
-                else:
-                    self._device = "cpu"
-
-                self._model, _, self._preprocess = open_clip.create_model_and_transforms(
-                    self.model_name, pretrained=self.pretrained
-                )
-                self._model = self._model.to(self._device).eval()
-                self._tokenizer = open_clip.get_tokenizer(self.model_name)
-                self._encode_vocabulary()
-                self._warmup()
-
-                elapsed = time.perf_counter() - t0
-                logger.info(
-                    f"CLIP Astro prêt sur {self._device} en {elapsed:.1f}s "
-                    f"({len(self.vocabulary)} tags encodés)"
-                )
-                self._loaded = True
-                return True
-            except Exception as e:
-                logger.error(f"Impossible de charger CLIP Astro : {e}")
-                return False
-
-    def _encode_vocabulary(self):
-        import torch
-        with torch.no_grad():
-            tokens = self._tokenizer(self.vocabulary).to(self._device)
-            self._text_features = self._model.encode_text(tokens)
-            self._text_features /= self._text_features.norm(dim=-1, keepdim=True)
-
-    def _warmup(self):
-        import torch
-        dummy = Image.new("RGB", (224, 224), color=(0, 0, 20))
-        img_t = self._preprocess(dummy).unsqueeze(0).to(self._device)
-        with torch.no_grad():
-            _ = self._model.encode_image(img_t)
 
     # -------------------------------------------------------------------------
     # Interface publique
     # -------------------------------------------------------------------------
 
     def check_available(self) -> tuple[bool, str]:
-        if not _CLIP_AVAILABLE:
-            return False, "open_clip non installé (pip install open_clip_torch)"
-        ok = self._ensure_loaded()
-        if ok:
-            ngc_status = " + OpenNGC" if _OPENNUGC_AVAILABLE else ""
-            return True, f"CLIP {self.model_name} sur {self._device}{ngc_status}"
-        return False, "Impossible de charger le modèle CLIP Astro"
+        parts = []
+        if _ASTROMETRY_AVAILABLE:
+            parts.append("plate solving offline")
+        if _SIMBAD_AVAILABLE:
+            parts.append("SIMBAD")
+        if _OPENNUGC_AVAILABLE:
+            parts.append("OpenNGC")
+        if self.ollama_fallback:
+            parts.append("Ollama fallback")
+
+        if not parts:
+            return False, (
+                "Aucune dépendance astro disponible. "
+                "pip install astrometry astroquery sep"
+            )
+        return True, "Astro : " + " + ".join(parts)
 
     def generate_tags(self, image_path: Path) -> list[str]:
         """
-        Génère les tags astro pour une image :
-          - Tags CLIP zero-shot (vocabulaire astro)
-          - FOV estimé depuis les EXIF (si focal length disponible)
-          - Objets Messier/NGC identifiés via OpenNGC (si RA/Dec dans EXIF)
+        Génère les tags pour une photo astro :
+          1. FOV depuis EXIF
+          2. Plate solving → SIMBAD (si étoiles détectables)
+          3. RA/Dec EXIF → OpenNGC (si plate solving impossible)
+          4. Ollama fallback (si tout échoue)
         """
-        if not self._ensure_loaded():
-            return []
-
-        import torch
         tags = []
         t0 = time.perf_counter()
 
         try:
-            # ── 1. Tags CLIP zero-shot ────────────────────────────────────────
-            with Image.open(image_path) as img:
-                if img.mode != "RGB":
-                    img = img.convert("RGB")
-                img_tensor = self._preprocess(img).unsqueeze(0).to(self._device)
+            # ── 1. FOV depuis EXIF ────────────────────────────────────────────
+            fov_info = self._fov_from_exif(image_path)
+            if fov_info:
+                fov_h, fov_v, focal_mm = fov_info
+                tags.append(self._fmt_fov(fov_h, fov_v))
 
-            with torch.no_grad():
-                img_features = self._model.encode_image(img_tensor)
-                img_features /= img_features.norm(dim=-1, keepdim=True)
-                similarities = (img_features @ self._text_features.T)[0]
+            # ── 2. Plate solving + SIMBAD ─────────────────────────────────────
+            solved_ra, solved_dec = None, None
+            if self.use_plate_solving and _ASTROMETRY_AVAILABLE:
+                fov_hint_deg = fov_info[0] if fov_info else None
+                solved_ra, solved_dec = self._plate_solve(image_path, fov_hint_deg)
 
-            top_k = min(self.top_k, len(self.vocabulary))
-            top_indices = similarities.topk(top_k).indices.cpu().tolist()
-            tags = [self.vocabulary[i] for i in top_indices]
+            if solved_ra is not None:
+                logger.info(
+                    f"Plate solving OK pour {image_path.name}: "
+                    f"RA={solved_ra:.4f}° Dec={solved_dec:.4f}°"
+                )
+                if self.use_simbad and _SIMBAD_AVAILABLE:
+                    simbad_tags = self._query_simbad(solved_ra, solved_dec)
+                    tags.extend(simbad_tags)
+                elif self.use_ngc_catalog and _OPENNUGC_AVAILABLE:
+                    tags.extend(self._query_ngc(solved_ra, solved_dec))
 
-            # ── 2. FOV depuis EXIF ────────────────────────────────────────────
-            fov_tags = self._fov_tags_from_exif(image_path)
-            tags.extend(fov_tags)
+            else:
+                # ── 3. Fallback RA/Dec EXIF → OpenNGC ────────────────────────
+                exif_ra, exif_dec = self._ra_dec_from_exif(image_path)
+                if exif_ra is not None and self.use_ngc_catalog and _OPENNUGC_AVAILABLE:
+                    logger.debug(f"Utilisation RA/Dec EXIF pour {image_path.name}")
+                    tags.extend(self._query_ngc(exif_ra, exif_dec))
 
-            # ── 3. Objets NGC/Messier via RA/Dec EXIF ─────────────────────────
-            ngc_tags = self._ngc_tags_from_exif(image_path)
-            tags.extend(ngc_tags)
+                # ── 4. Fallback Ollama ────────────────────────────────────────
+                if not tags and self.ollama_fallback:
+                    logger.debug(f"Fallback Ollama pour {image_path.name}")
+                    ollama_tags = self._do_ollama_fallback(image_path)
+                    tags.extend(ollama_tags)
 
             elapsed = time.perf_counter() - t0
             logger.debug(f"Astro {image_path.name}: {elapsed*1000:.0f}ms → {tags}")
@@ -256,45 +211,296 @@ class AstroClient:
 
         except Exception as e:
             logger.error(f"Erreur AstroClient sur {image_path.name}: {e}")
-            return tags  # retourne ce qu'on a déjà calculé
+            if not tags and self.ollama_fallback:
+                return self._do_ollama_fallback(image_path)
+            return tags
+
+    # -------------------------------------------------------------------------
+    # Plate solving (astrometry Python package, offline)
+    # -------------------------------------------------------------------------
+
+    def _plate_solve(
+        self, image_path: Path, fov_hint_deg: Optional[float] = None
+    ) -> tuple[Optional[float], Optional[float]]:
+        """
+        Tente d'identifier les étoiles et de faire le plate solving offline.
+        Retourne (ra_deg, dec_deg) du centre, ou (None, None) si échec.
+        """
+        try:
+            # Chargement image en niveaux de gris numpy
+            with Image.open(image_path) as img:
+                gray = np.array(img.convert("L"), dtype=np.float32)
+
+            # Détection des étoiles
+            stars = self._detect_stars(gray)
+            if len(stars) < 6:
+                logger.debug(
+                    f"Plate solving abandonné pour {image_path.name}: "
+                    f"seulement {len(stars)} étoiles détectées (min 6)"
+                )
+                return None, None
+
+            logger.debug(f"Plate solving {image_path.name}: {len(stars)} étoiles détectées")
+
+            # Hints de taille depuis FOV ou hint large par défaut
+            if fov_hint_deg and fov_hint_deg > 0:
+                # FOV en degrés → arcsec/pixel approximatif
+                h, w = gray.shape
+                scale_arcsec = fov_hint_deg * 3600 / max(w, h)
+                lower = scale_arcsec * 0.5
+                upper = scale_arcsec * 2.0
+            else:
+                lower = 0.1   # arcsec/pixel
+                upper = 180.0  # très grand champ
+
+            # Hints de position depuis EXIF si disponibles
+            position_hint = None
+            exif_ra, exif_dec = self._ra_dec_from_exif(image_path)
+            if exif_ra is not None:
+                position_hint = astrometry.PositionHint(
+                    ra_deg=exif_ra, dec_deg=exif_dec, radius_deg=5.0
+                )
+
+            # Chargement de l'index (série 5200 = Tycho-2 + Gaia, multi-échelle)
+            if self.astrometry_index_dir:
+                index_dir = Path(self.astrometry_index_dir)
+                index_files = list(index_dir.glob("*.fits"))
+            else:
+                # Téléchargement automatique (~5 Go, une seule fois)
+                try:
+                    index_files = astrometry.series_5200.index_files(
+                        cache_directory=str(Path.home() / ".cache" / "astrometry"),
+                        scales={6, 7, 8},   # couvre ~0.3° à ~10°
+                    )
+                except Exception as e:
+                    logger.warning(f"Impossible de charger l'index astrometry: {e}")
+                    return None, None
+
+            solver = astrometry.Solver(index_files)
+
+            # Positions des étoiles triées par flux décroissant
+            star_positions = [(float(s[0]), float(s[1])) for s in stars[:50]]
+
+            solution = solver.solve(
+                stars=star_positions,
+                size_hint=astrometry.SizeHint(
+                    lower_arcsec_per_pixel=lower,
+                    upper_arcsec_per_pixel=upper,
+                ),
+                position_hint=position_hint,
+                solution_parameters=astrometry.SolutionParameters(
+                    logodds_callback=lambda logodds: (
+                        astrometry.Action.STOP if logodds > 30 else astrometry.Action.CONTINUE
+                    ),
+                ),
+            )
+
+            if solution.has_match():
+                match = solution.best_match()
+                # Centre de l'image en RA/Dec
+                h, w = gray.shape
+                wcs = match.astropy_wcs()
+                from astropy.wcs import WCS
+                ra, dec = wcs.all_pix2world([[w / 2, h / 2]], 0)[0]
+                return float(ra), float(dec)
+
+            return None, None
+
+        except Exception as e:
+            logger.debug(f"Plate solving échoué pour {image_path.name}: {e}")
+            return None, None
+
+    def _detect_stars(self, gray: "np.ndarray") -> list:
+        """
+        Détecte les étoiles dans l'image en niveaux de gris.
+        Essaie sep (rapide, C) puis photutils (pure Python).
+        Retourne une liste de (x, y, flux) triés par flux décroissant.
+        """
+        if _SEP_AVAILABLE:
+            return self._detect_stars_sep(gray)
+        elif _PHOTUTILS_AVAILABLE:
+            return self._detect_stars_photutils(gray)
+        else:
+            # Fallback très simple : détection de maxima locaux
+            return self._detect_stars_simple(gray)
+
+    def _detect_stars_sep(self, gray: "np.ndarray") -> list:
+        try:
+            data = gray.astype(np.float64)
+            bkg = sep.Background(data)
+            data_sub = data - bkg
+            objects = sep.extract(data_sub, 1.5, err=bkg.globalrms, minarea=5)
+            stars = sorted(
+                [(float(o["x"]), float(o["y"]), float(o["flux"])) for o in objects],
+                key=lambda s: -s[2]
+            )
+            return stars
+        except Exception as e:
+            logger.debug(f"sep échoué: {e}")
+            return self._detect_stars_simple(gray)
+
+    def _detect_stars_photutils(self, gray: "np.ndarray") -> list:
+        try:
+            mean, median, std = sigma_clipped_stats(gray)
+            finder = DAOStarFinder(fwhm=3.0, threshold=5.0 * std)
+            sources = finder(gray - median)
+            if sources is None:
+                return []
+            stars = sorted(
+                [(float(s["xcentroid"]), float(s["ycentroid"]), float(s["peak"])) for s in sources],
+                key=lambda s: -s[2]
+            )
+            return stars
+        except Exception as e:
+            logger.debug(f"photutils échoué: {e}")
+            return self._detect_stars_simple(gray)
+
+    def _detect_stars_simple(self, gray: "np.ndarray") -> list:
+        """Détection naïve : pixels très brillants dans une image redimensionnée."""
+        try:
+            # Réduire pour accélérer
+            small = gray[::4, ::4]
+            threshold = np.percentile(small, 99.5)
+            ys, xs = np.where(small > threshold)
+            # Regrouper les voisins proches
+            stars = [(float(x * 4), float(y * 4), float(gray[y * 4, x * 4]))
+                     for x, y in zip(xs, ys)]
+            return sorted(stars, key=lambda s: -s[2])[:100]
+        except Exception:
+            return []
+
+    # -------------------------------------------------------------------------
+    # SIMBAD cone search
+    # -------------------------------------------------------------------------
+
+    def _query_simbad(self, ra_deg: float, dec_deg: float) -> list[str]:
+        """
+        Interroge SIMBAD autour de (ra_deg, dec_deg) et retourne les tags
+        des objets intéressants (nébuleuses, galaxies, amas — pas les étoiles).
+        """
+        try:
+            if self._simbad_client is None:
+                self._simbad_client = Simbad()
+                self._simbad_client.add_votable_fields("otype", "ids")
+                self._simbad_client.TIMEOUT = 10
+
+            center = SkyCoord(ra=ra_deg, dec=dec_deg, unit="deg")
+            results = self._simbad_client.query_region(
+                center, radius=self.simbad_radius_deg * u.deg
+            )
+
+            if results is None:
+                return []
+
+            tags = []
+            for row in results:
+                otype = str(row["OTYPE"]).strip()
+                main_id = str(row["MAIN_ID"]).strip()
+
+                # Filtrer : garder seulement les objets non-stellaires
+                if not any(otype.startswith(t) for t in SIMBAD_INTERESTING_TYPES):
+                    continue
+
+                # Chercher un identifiant Messier dans les IDs alternatifs
+                ids_str = str(row.get("IDS", ""))
+                messier_id = None
+                for part in ids_str.split("|"):
+                    part = part.strip()
+                    if part.startswith("M ") or part.startswith("M\xa0"):
+                        m_num = part.replace("M ", "M").replace("M\xa0", "M").strip()
+                        if m_num in MESSIER_NAMES:
+                            messier_id = m_num
+                            break
+
+                # Construire le tag
+                label = main_id
+                if messier_id:
+                    common = MESSIER_NAMES.get(messier_id, "")
+                    label = f"{messier_id} / {main_id} — {common}" if common else f"{messier_id} / {main_id}"
+                elif otype:
+                    label = f"{main_id} [{otype}]"
+
+                tags.append(label)
+                logger.debug(f"SIMBAD: {label}")
+
+            if tags:
+                logger.info(f"SIMBAD: {len(tags)} objet(s) identifié(s)")
+            return tags
+
+        except Exception as e:
+            logger.warning(f"Erreur SIMBAD: {e}")
+            return []
+
+    # -------------------------------------------------------------------------
+    # OpenNGC (fallback offline)
+    # -------------------------------------------------------------------------
+
+    def _query_ngc(self, ra_deg: float, dec_deg: float) -> list[str]:
+        """Interroge le catalogue OpenNGC autour de (ra_deg, dec_deg)."""
+        if self._ngc_db is None:
+            try:
+                self._ngc_db = opennugc.OpenNGC()
+            except Exception as e:
+                logger.warning(f"Impossible de charger OpenNGC: {e}")
+                return []
+
+        tags = []
+        try:
+            for obj in self._ngc_db.get_objects():
+                try:
+                    obj_ra  = float(obj.ra) * 15  # heures → degrés
+                    obj_dec = float(obj.dec)
+                except (TypeError, ValueError):
+                    continue
+
+                d_ra  = abs(ra_deg - obj_ra) * math.cos(math.radians(dec_deg))
+                d_dec = abs(dec_deg - obj_dec)
+                if math.sqrt(d_ra**2 + d_dec**2) <= self.ngc_search_radius:
+                    name   = obj.name or ""
+                    common = getattr(obj, "commonname", "") or ""
+                    otype  = getattr(obj, "type", "") or ""
+                    label  = f"{name} ({common})" if common else name
+                    if otype:
+                        label = f"{label} [{otype}]"
+                    tags.append(label)
+
+            if tags:
+                logger.info(f"OpenNGC: {len(tags)} objet(s) identifié(s)")
+        except Exception as e:
+            logger.warning(f"Erreur OpenNGC: {e}")
+
+        return tags
 
     # -------------------------------------------------------------------------
     # FOV depuis EXIF
     # -------------------------------------------------------------------------
 
-    def _fov_tags_from_exif(self, image_path: Path) -> list[str]:
+    def _fov_from_exif(
+        self, image_path: Path
+    ) -> Optional[tuple[float, float, float]]:
         """
-        Calcule le FOV (angle de champ) depuis la focale EXIF.
-        Priorité : FocalLengthIn35mmFilm (équivalent plein format) >
-                   FocalLength + dimensions capteur configurées.
-        Retourne des tags du type : 'FOV 2.1° × 1.4°' ou 'FOV 45° × 30°'.
+        Retourne (fov_h_deg, fov_v_deg, focal_mm) ou None.
+        Priorité : FocalLengthIn35mmFilm > FocalLength + capteur config.
         """
         try:
             with Image.open(image_path) as img:
                 exif_raw = img._getexif()
-
             if not exif_raw:
-                return []
-
-            # Construire un dict lisible
+                return None
             exif = {ExifTags.TAGS.get(k, k): v for k, v in exif_raw.items()}
 
-            focal_mm: Optional[float] = None
             sensor_w = self.sensor_width_mm
             sensor_h = self.sensor_height_mm
+            focal_mm: Optional[float] = None
 
-            # Méthode 1 : FocalLengthIn35mmFilm → focale équivalente 35mm
-            # → on peut calculer le FOV directement avec les dims 35mm standard
             fl35 = exif.get("FocalLengthIn35mmFilm")
             if fl35 and float(fl35) > 0:
                 focal_mm = float(fl35)
                 sensor_w = DEFAULT_SENSOR_WIDTH_MM
                 sensor_h = DEFAULT_SENSOR_HEIGHT_MM
             else:
-                # Méthode 2 : FocalLength réelle + dims capteur configurées
                 fl = exif.get("FocalLength")
                 if fl is not None:
-                    # Peut être un IFDRational ou un tuple (num, den)
                     if hasattr(fl, "numerator"):
                         focal_mm = fl.numerator / fl.denominator if fl.denominator else None
                     elif isinstance(fl, tuple):
@@ -303,176 +509,95 @@ class AstroClient:
                         focal_mm = float(fl)
 
             if not focal_mm or focal_mm <= 0:
-                return []
+                return None
 
             fov_h = math.degrees(2 * math.atan(sensor_w / (2 * focal_mm)))
             fov_v = math.degrees(2 * math.atan(sensor_h / (2 * focal_mm)))
+            return fov_h, fov_v, focal_mm
 
-            # Format lisible selon la taille du champ
-            def _fmt(deg: float) -> str:
-                if deg < 1.0:
-                    return f"{deg * 60:.1f}'"      # minutes d'arc
-                return f"{deg:.1f}°"
+        except Exception:
+            return None
 
-            fov_tag = f"FOV {_fmt(fov_h)} × {_fmt(fov_v)}"
-            logger.debug(f"FOV calculé : {fov_tag} (f={focal_mm:.0f}mm)")
-            return [fov_tag]
-
-        except Exception as e:
-            logger.debug(f"Calcul FOV impossible pour {image_path.name}: {e}")
-            return []
+    def _fmt_fov(self, fov_h: float, fov_v: float) -> str:
+        def _f(d: float) -> str:
+            return f"{d * 60:.1f}'" if d < 1.0 else f"{d:.1f}°"
+        return f"FOV {_f(fov_h)} × {_f(fov_v)}"
 
     # -------------------------------------------------------------------------
-    # Identification NGC / Messier depuis RA/Dec EXIF
+    # RA/Dec depuis EXIF (N.I.N.A., SGP via GPS)
     # -------------------------------------------------------------------------
 
-    def _ngc_tags_from_exif(self, image_path: Path) -> list[str]:
+    def _ra_dec_from_exif(
+        self, image_path: Path
+    ) -> tuple[Optional[float], Optional[float]]:
         """
-        Cherche les objets Messier/NGC/IC dans le champ de l'image,
-        en utilisant les coordonnées RA/Dec si présentes dans les EXIF.
-        Certains boîtiers astro (ZWO, QHYCCD) ou logiciels (SGP, N.I.N.A.)
-        écrivent ces coordonnées dans des champs EXIF/IPTC personnalisés.
+        Extrait RA/Dec depuis les champs GPS EXIF (convention N.I.N.A./SGP).
+        GPS Latitude → Déclinaison, GPS Longitude → RA (degrés).
         """
-        if not self.use_ngc_catalog or not _OPENNUGC_AVAILABLE:
-            return []
-
         try:
             with Image.open(image_path) as img:
                 exif_raw = img._getexif()
-
             if not exif_raw:
-                return []
-
+                return None, None
             exif = {ExifTags.TAGS.get(k, k): v for k, v in exif_raw.items()}
-
-            # GPSInfo contient parfois RA/Dec pour les photos astro
-            # (certains softs écrivent le centrage en GPS !)
-            ra_deg, dec_deg = self._extract_ra_dec(exif)
-            if ra_deg is None:
-                return []
-
-            return self._query_ngc(ra_deg, dec_deg)
-
-        except Exception as e:
-            logger.debug(f"Recherche NGC impossible pour {image_path.name}: {e}")
-            return []
-
-    def _extract_ra_dec(self, exif: dict) -> tuple[Optional[float], Optional[float]]:
-        """
-        Tente d'extraire RA/Dec depuis les champs GPS de l'EXIF.
-        Convention utilisée par certains logiciels d'acquisition astro :
-        - GPS Latitude  → Déclinaison (Dec)
-        - GPS Longitude → Ascension droite (RA en degrés)
-        """
-        try:
             gps = exif.get("GPSInfo")
             if not gps:
                 return None, None
 
             gps_tags = {ExifTags.GPSTAGS.get(k, k): v for k, v in gps.items()}
 
-            def _dms_to_deg(dms) -> Optional[float]:
-                if dms is None:
-                    return None
+            def _dms(val) -> Optional[float]:
                 try:
-                    d, m, s = dms
-                    d = d.numerator / d.denominator if hasattr(d, "numerator") else float(d)
-                    m = m.numerator / m.denominator if hasattr(m, "numerator") else float(m)
-                    s = s.numerator / s.denominator if hasattr(s, "numerator") else float(s)
-                    return d + m / 60 + s / 3600
+                    d, m, s = val
+                    to_f = lambda x: x.numerator / x.denominator if hasattr(x, "numerator") else float(x)
+                    return to_f(d) + to_f(m) / 60 + to_f(s) / 3600
                 except Exception:
                     return None
 
-            lat = _dms_to_deg(gps_tags.get("GPSLatitude"))
-            lat_ref = gps_tags.get("GPSLatitudeRef", "N")
-            lon = _dms_to_deg(gps_tags.get("GPSLongitude"))
-            lon_ref = gps_tags.get("GPSLongitudeRef", "E")
-
+            lat = _dms(gps_tags.get("GPSLatitude"))
+            lon = _dms(gps_tags.get("GPSLongitude"))
             if lat is None or lon is None:
                 return None, None
 
+            lat_ref = gps_tags.get("GPSLatitudeRef", "N")
+            lon_ref = gps_tags.get("GPSLongitudeRef", "E")
             dec_deg = lat if lat_ref == "N" else -lat
-            # RA en heures → degrés
-            ra_h = lon if lon_ref == "E" else 360 - lon
-            ra_deg = ra_h  # déjà en degrés si lon ∈ [0, 360]
-
+            ra_deg  = lon if lon_ref == "E" else 360.0 - lon
             return ra_deg, dec_deg
 
         except Exception:
             return None, None
 
-    def _query_ngc(self, ra_deg: float, dec_deg: float) -> list[str]:
-        """Interroge le catalogue OpenNGC autour de (ra_deg, dec_deg)."""
-        if self._ngc_db is None:
-            try:
-                self._ngc_db = opennugc.OpenNGC()
-                logger.info("Catalogue OpenNGC chargé")
-            except Exception as e:
-                logger.warning(f"Impossible de charger OpenNGC : {e}")
-                return []
+    # -------------------------------------------------------------------------
+    # Fallback Ollama
+    # -------------------------------------------------------------------------
 
-        tags = []
+    def _do_ollama_fallback(self, image_path: Path) -> list[str]:
+        """Fallback Ollama avec prompt spécialisé astrophotographie."""
+        if not self.ollama_fallback:
+            return []
         try:
-            objects = self._ngc_db.get_objects()
-            for obj in objects:
-                try:
-                    obj_ra  = float(obj.ra)   * 15  # heures → degrés
-                    obj_dec = float(obj.dec)
-                except (TypeError, ValueError):
-                    continue
-
-                # Distance angulaire approchée (valid pour petits angles)
-                d_ra  = abs(ra_deg  - obj_ra)  * math.cos(math.radians(dec_deg))
-                d_dec = abs(dec_deg - obj_dec)
-                dist  = math.sqrt(d_ra**2 + d_dec**2)
-
-                if dist <= self.ngc_search_radius:
-                    name = obj.name or ""
-                    obj_type = getattr(obj, "type", "") or ""
-                    common = getattr(obj, "commonname", "") or ""
-
-                    label = name
-                    if common:
-                        label = f"{name} ({common})"
-                    if obj_type:
-                        label = f"{label} [{obj_type}]"
-
-                    tags.append(label)
-                    logger.debug(f"NGC trouvé : {label} à {dist:.2f}° du centre")
-
-            if tags:
-                logger.info(f"OpenNGC : {len(tags)} objet(s) identifié(s) dans le champ")
-
+            if self._ollama_client is None:
+                from ollama_client import OllamaClient
+                cfg = dict(self._config)
+                cfg.setdefault("prompt", {})["auto_prompt"] = (
+                    "You are an expert astrophotographer and astronomer. "
+                    "Analyze this astronomical image.\n"
+                    "1. Identify the type of object: nebula, galaxy, star cluster, "
+                    "   planet, comet, Milky Way, auroras, star trails, etc.\n"
+                    "2. If recognizable, name the specific object (e.g. M42, NGC 891, "
+                    "   Orion Nebula, Andromeda Galaxy, Saturn, Pleiades).\n"
+                    "3. Describe key visual features: shape, color, structure.\n"
+                    "4. Add technical tags: long exposure, narrowband, Ha, OIII, RGB, "
+                    "   wide field, deep sky, mosaic, etc. if applicable.\n"
+                    "Return only comma-separated tags, nothing else. "
+                    "Use French for common names."
+                )
+                self._ollama_client = OllamaClient(cfg)
+            return self._ollama_client.generate_tags(image_path)
         except Exception as e:
-            logger.warning(f"Erreur requête OpenNGC : {e}")
-
-        return tags
-
-    # -------------------------------------------------------------------------
-    # Rechargement du vocabulaire
-    # -------------------------------------------------------------------------
-
-    def reload_vocabulary(self, new_vocabulary: list[str]):
-        if not self._loaded:
-            self.vocabulary = new_vocabulary
-            return
-        with self._lock:
-            self.vocabulary = new_vocabulary
-            self._encode_vocabulary()
-            logger.info(f"Vocabulaire Astro rechargé : {len(new_vocabulary)} tags")
+            logger.error(f"Ollama fallback astro échoué pour {image_path.name}: {e}")
+            return []
 
     def unload(self):
-        if not self._loaded:
-            return
-        with self._lock:
-            import torch
-            del self._model
-            del self._text_features
-            self._model = None
-            self._text_features = None
-            self._loaded = False
-            if self._device == "mps":
-                torch.mps.empty_cache()
-            elif self._device == "cuda":
-                torch.cuda.empty_cache()
-            logger.info("Modèle CLIP Astro déchargé")
+        pass  # Pas de modèle en mémoire permanente dans ce client

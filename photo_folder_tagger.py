@@ -62,7 +62,7 @@ MODES = {
     },
     "astro": {
         "label": "🔭  Astro",
-        "desc": "CLIP astro — objets du ciel, FOV EXIF, catalogue NGC (~50ms/photo)",
+        "desc": "Plate solving + SIMBAD + OpenNGC + Ollama — identification précise des objets du ciel",
         "color": "#4a235a",
         "color_hover": "#6c3483",
     },
@@ -1081,10 +1081,12 @@ class MainWindow(QMainWindow):
             )
         elif mode == "astro":
             astro_cfg = cfg.get("astro", {})
+            ps  = "oui" if astro_cfg.get("use_plate_solving", True) else "non"
+            sim = "oui" if astro_cfg.get("use_simbad", True) else "non"
+            ngc = "oui" if astro_cfg.get("use_ngc_catalog", True) else "non"
             engine_line = (
-                f"  Moteur CLIP Astro : {astro_cfg.get('model', 'ViT-L-14')}  |  "
-                f"FOV EXIF : oui  |  "
-                f"Catalogue NGC : {'oui' if astro_cfg.get('use_ngc_catalog', True) else 'non'}  |  "
+                f"  Moteur Astro      : Plate solving offline + SIMBAD + OpenNGC + Ollama fallback\n"
+                f"  Plate solving : {ps}  |  SIMBAD : {sim}  |  OpenNGC : {ngc}  |  "
                 f"Capteur : {astro_cfg.get('sensor_width_mm', 36)}×{astro_cfg.get('sensor_height_mm', 24)} mm", "warn", False
             )
         elif mode == "oiseaux":
@@ -1173,10 +1175,9 @@ class MainWindow(QMainWindow):
                         f"Suffixe : '{cfg['xmp']['tag_suffix']}'"
                     )
                 elif mode == "astro":
-                    astro_cfg = cfg.get("astro", {})
                     lbl.setText(
-                        f"Mode : {mode_label}  |  CLIP {astro_cfg.get('model', 'ViT-L-14')}  |  "
-                        f"FOV EXIF + NGC  |  Suffixe : '{cfg['xmp']['tag_suffix']}'"
+                        f"Mode : {mode_label}  |  Plate solving + SIMBAD + OpenNGC + Ollama  |  "
+                        f"Suffixe : '{cfg['xmp']['tag_suffix']}'"
                     )
                 elif mode == "oiseaux":
                     lbl.setText(

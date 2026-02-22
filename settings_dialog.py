@@ -484,36 +484,21 @@ class SettingsDialog(QDialog):
 
     def _build_tab_astro(self):
         container, layout = self._scrollable_tab("🔭  Astro")
-        form = self._form_group(layout, "CLIP local — Mode Astronomie")
 
-        form.addRow("", self._desc(
-            "Moteur CLIP spécialisé astro : reconnaissance zero-shot d'objets du ciel "
-            "(nébuleuses, galaxies, planètes, amas…). Calcul du FOV depuis les EXIF. "
-            "Identification Messier/NGC via catalogue OpenNGC (pip install opennugc)."
+        form0 = self._form_group(layout, "Pipeline d'identification")
+        form0.addRow("", self._desc(
+            "Nouveau pipeline en 4 niveaux :\n"
+            "1. Plate solving offline (pkg astrometry) → coordonnées exactes\n"
+            "2. SIMBAD cone search → objets NGC/IC/Messier depuis la base CDS\n"
+            "3. OpenNGC offline → fallback si pas d'internet\n"
+            "4. Ollama qwen2.5vl → fallback pour planètes / nébuleuses sans étoiles"
         ))
 
-        model = QComboBox()
-        for m, label in [
-            ("ViT-B-32", "ViT-B-32 — très rapide (~23ms)"),
-            ("ViT-B-16", "ViT-B-16 — rapide (~46ms)"),
-            ("ViT-L-14", "ViT-L-14 — précis (~180ms, recommandé pour astro)"),
-        ]:
-            model.addItem(label, m)
-        self._widgets["astro.model"] = model
-        form.addRow("Modèle CLIP", model)
-
-        top_k = QSpinBox()
-        top_k.setRange(1, 20)
-        top_k.setToolTip("Nombre de tags CLIP retournés par photo")
-        self._widgets["astro.top_k"] = top_k
-        form.addRow("Nombre de tags CLIP", top_k)
-
-        form2 = self._form_group(layout, "Capteur — Calcul du FOV")
-        form2.addRow("", self._desc(
-            "Dimensions de votre capteur photo en millimètres. Utilisées pour calculer "
-            "l'angle de champ (FOV) depuis la focale EXIF. "
-            "Plein format 35mm : 36×24 mm. APS-C Canon : 22.3×14.9 mm. "
-            "APS-C Sony/Nikon : 23.5×15.6 mm. Micro 4/3 : 17.3×13 mm."
+        # ── Capteur ──────────────────────────────────────────────────────────
+        form1 = self._form_group(layout, "Capteur — Calcul du FOV EXIF")
+        form1.addRow("", self._desc(
+            "Plein format 35mm : 36×24 mm  |  APS-C Canon : 22.3×14.9 mm\n"
+            "APS-C Sony/Nikon : 23.5×15.6 mm  |  Micro 4/3 : 17.3×13 mm"
         ))
 
         sensor_w = QDoubleSpinBox()
@@ -522,7 +507,7 @@ class SettingsDialog(QDialog):
         sensor_w.setDecimals(1)
         sensor_w.setSuffix(" mm")
         self._widgets["astro.sensor_width_mm"] = sensor_w
-        form2.addRow("Largeur capteur", sensor_w)
+        form1.addRow("Largeur capteur", sensor_w)
 
         sensor_h = QDoubleSpinBox()
         sensor_h.setRange(1.0, 100.0)
@@ -530,42 +515,81 @@ class SettingsDialog(QDialog):
         sensor_h.setDecimals(1)
         sensor_h.setSuffix(" mm")
         self._widgets["astro.sensor_height_mm"] = sensor_h
-        form2.addRow("Hauteur capteur", sensor_h)
+        form1.addRow("Hauteur capteur", sensor_h)
 
-        form3 = self._form_group(layout, "Catalogue NGC/Messier")
-        form3.addRow("", self._desc(
-            "Identification des objets Messier / NGC / IC dans le champ de l'image, "
-            "si les coordonnées RA/Dec sont présentes dans les EXIF "
-            "(boîtiers astro goto, N.I.N.A., SGP…). Nécessite : pip install opennugc"
+        # ── Plate solving ─────────────────────────────────────────────────────
+        form2 = self._form_group(layout, "Plate solving offline (pip install astrometry)")
+        form2.addRow("", self._desc(
+            "Identifie les étoiles dans l'image et calcule les coordonnées RA/Dec exactes. "
+            "Télécharge ~5 Go d'index Tycho-2+Gaia dans ~/.cache/astrometry au premier lancement. "
+            "Nécessite que l'image contienne des étoiles resolues (min. 6)."
         ))
 
-        use_ngc = QCheckBox("Activer l'identification via catalogue OpenNGC")
-        self._widgets["astro.use_ngc_catalog"] = use_ngc
-        form3.addRow(use_ngc)
+        use_ps = QCheckBox("Activer le plate solving offline")
+        self._widgets["astro.use_plate_solving"] = use_ps
+        form2.addRow(use_ps)
 
-        radius = QDoubleSpinBox()
-        radius.setRange(0.5, 30.0)
-        radius.setSingleStep(0.5)
-        radius.setDecimals(1)
-        radius.setSuffix(" °")
-        radius.setToolTip(
-            "Rayon de recherche autour du centre de l'image.\n"
-            "5° est adapté à la plupart des champs (grand angle à longue focale)."
+        index_dir = QLineEdit()
+        index_dir.setPlaceholderText("Vide = téléchargement auto dans ~/.cache/astrometry")
+        index_dir.setToolTip(
+            "Dossier contenant les fichiers d'index .fits (séries 4100/5200).\n"
+            "Laisser vide pour le téléchargement automatique."
         )
-        self._widgets["astro.ngc_search_radius_deg"] = radius
-        form3.addRow("Rayon de recherche", radius)
+        self._widgets["astro.astrometry_index_dir"] = index_dir
+        form2.addRow("Dossier d'index", index_dir)
 
-        form4 = self._form_group(layout, "Vocabulaire astro (un tag par ligne)")
-        form4.addRow("", self._desc(
-            "Tags que CLIP peut assigner en zero-shot. "
-            "Privilégiez des termes précis en français : 'nébuleuse d'émission', "
-            "'galaxie spirale', 'amas globulaire'…"
+        # ── SIMBAD ────────────────────────────────────────────────────────────
+        form3 = self._form_group(layout, "SIMBAD (pip install astroquery) — nécessite internet")
+        form3.addRow("", self._desc(
+            "Base de données CDS Strasbourg — 20 millions d'objets. "
+            "Interrogé après le plate solving pour identifier les objets dans le champ. "
+            "Cache local de 1 semaine pour limiter les requêtes."
         ))
-        vocab_edit = QTextEdit()
-        vocab_edit.setMinimumHeight(280)
-        vocab_edit.setPlaceholderText("nébuleuse\ngalaxie spirale\namas globulaire\n…")
-        self._widgets["astro.vocabulary"] = vocab_edit
-        form4.addRow(vocab_edit)
+
+        use_simbad = QCheckBox("Activer le cone search SIMBAD")
+        self._widgets["astro.use_simbad"] = use_simbad
+        form3.addRow(use_simbad)
+
+        simbad_r = QDoubleSpinBox()
+        simbad_r.setRange(0.1, 10.0)
+        simbad_r.setSingleStep(0.1)
+        simbad_r.setDecimals(1)
+        simbad_r.setSuffix(" °")
+        simbad_r.setToolTip("Rayon de recherche SIMBAD autour du centre résolu.")
+        self._widgets["astro.simbad_radius_deg"] = simbad_r
+        form3.addRow("Rayon SIMBAD", simbad_r)
+
+        # ── OpenNGC ───────────────────────────────────────────────────────────
+        form4 = self._form_group(layout, "OpenNGC offline — fallback (pip install opennugc)")
+        form4.addRow("", self._desc(
+            "Catalogue NGC/IC/Messier offline. Utilisé si SIMBAD est indisponible "
+            "ou si les coordonnées viennent des EXIF (N.I.N.A., SGP)."
+        ))
+
+        use_ngc = QCheckBox("Activer le catalogue OpenNGC")
+        self._widgets["astro.use_ngc_catalog"] = use_ngc
+        form4.addRow(use_ngc)
+
+        ngc_r = QDoubleSpinBox()
+        ngc_r.setRange(0.5, 30.0)
+        ngc_r.setSingleStep(0.5)
+        ngc_r.setDecimals(1)
+        ngc_r.setSuffix(" °")
+        self._widgets["astro.ngc_search_radius_deg"] = ngc_r
+        form4.addRow("Rayon de recherche", ngc_r)
+
+        # ── Ollama fallback ───────────────────────────────────────────────────
+        form5 = self._form_group(layout, "Fallback Ollama — planètes et nébuleuses diffuses")
+        form5.addRow("", self._desc(
+            "Utilisé quand le plate solving échoue (image sans étoiles : planètes, "
+            "nébuleuses diffuses plein champ, aurores, Voie Lactée grand angle). "
+            "Utilise le même modèle Ollama que le mode Vacances (qwen2.5vl:7b) "
+            "avec un prompt spécialisé astrophotographie."
+        ))
+
+        use_ollama = QCheckBox("Activer le fallback Ollama")
+        self._widgets["astro.ollama_fallback"] = use_ollama
+        form5.addRow(use_ollama)
 
     # ---- Onglet Oiseaux (mode Oiseaux) ---------------------------------------
 
