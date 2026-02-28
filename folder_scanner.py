@@ -18,7 +18,7 @@ class PhotoEntry:
     """Représente une photo à traiter."""
     path: str           # Chemin absolu vers le fichier image
     xmp_exists: bool    # True si un fichier XMP existe déjà
-    has_ai_tags: bool   # True si des tags IA sont déjà présents
+    has_ai_tags: bool   # True si des tags existent déjà (avec ou sans suffixe _ai)
     processed: bool = False
     failed: bool = False
     tag_count: int = 0
@@ -88,7 +88,7 @@ class FolderScanner:
         for image_path in self._iter_images(folder_path):
             xmp_path = xmp_manager.get_xmp_path(image_path)
             xmp_exists = xmp_path.exists()
-            has_ai_tags = xmp_manager.has_ai_tags(image_path) if xmp_exists else False
+            has_ai_tags = xmp_manager.has_existing_tags(image_path) if xmp_exists else False
 
             entry = PhotoEntry(
                 path=str(image_path),

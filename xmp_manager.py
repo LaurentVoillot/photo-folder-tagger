@@ -199,21 +199,22 @@ class XMPManager:
             logger.error(f"Erreur écriture XMP {xmp_path}: {e}")
             return False
 
-    def has_ai_tags(self, image_path: Path) -> bool:
+    def has_existing_tags(self, image_path: Path) -> bool:
         """
-        Vérifie si une image a déjà des tags IA (avec le suffixe configuré).
+        Vérifie si une image a déjà des tags (avec ou sans suffixe IA).
+
+        Utilisé par le mode "ignorer les photos déjà taguées" : toute photo
+        portant au moins un tag (manuels ou générés par l'IA) est considérée
+        comme déjà traitée et ne sera pas re-taguée.
 
         Args:
             image_path: Chemin vers le fichier image
 
         Returns:
-            True si des tags IA existent déjà
+            True si au moins un tag existe déjà dans le XMP
         """
-        if not self.tag_suffix:
-            return False
-
         existing = self.read_tags(image_path)
-        return any(tag.endswith(self.tag_suffix) for tag in existing)
+        return len(existing) > 0
 
     # -------------------------------------------------------------------------
     # Méthodes privées
