@@ -190,6 +190,14 @@ class TaggerEngine:
         elif self.mode == "insectes":
             return self.insects.generate_tags(image_path)
         else:  # vacances (défaut)
+            # Si des tags _ai existent déjà, inutile de rappeler Ollama
+            suffix = self.xmp_manager.tag_suffix
+            if suffix:
+                existing = self.xmp_manager.read_tags(image_path)
+                ai_tags = [t for t in existing if t.endswith(suffix)]
+                if ai_tags:
+                    logger.debug(f"Tags _ai déjà présents, Ollama ignoré : {image_path.name}")
+                    return ai_tags
             return self.ollama.generate_tags(image_path)
 
     def check_mode_available(self) -> tuple[bool, str]:
