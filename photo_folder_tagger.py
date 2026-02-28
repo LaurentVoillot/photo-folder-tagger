@@ -399,16 +399,16 @@ class TaggerEngine:
                 image_path = entry.image_path
                 progress_callback(i + 1, total, image_path.name)
                 if not image_path.exists():
-                    log_callback(f"IGNORÉ (introuvable) : {image_path}")
+                    log_callback(f"IGNORÉ (introuvable) : {self._rel(image_path)}")
                     fail_count += 1
                     continue
                 tags = self._generate_tags(image_path)
                 if tags:
-                    log_callback(f"📷 {image_path}")
+                    log_callback(f"📷 {self._rel(image_path)}")
                     log_callback(f"   → {', '.join(tags)}\n")
                     ok_count += 1
                 else:
-                    log_callback(f"ÉCHEC (pas de tags) : {image_path}\n")
+                    log_callback(f"ÉCHEC (pas de tags) : {self._rel(image_path)}\n")
                     fail_count += 1
 
             self._log_perf_summary(log_callback)
@@ -420,10 +420,17 @@ class TaggerEngine:
             logger.exception("Erreur fatale en mode test")
             done_callback(False, f"Erreur : {e}")
 
+    def _rel(self, image_path: Path) -> str:
+        """Chemin relatif à la racine du traitement (ex: ./sous-dossier/photo.jpg)."""
+        try:
+            return f"./{image_path.relative_to(self._current_folder)}"
+        except (ValueError, TypeError):
+            return str(image_path)
+
     def _process_single(self, entry, log_callback) -> bool:
         image_path = entry.image_path
         if not image_path.exists():
-            log_callback(f"IGNORÉ (fichier introuvable): {image_path}")
+            log_callback(f"IGNORÉ (fichier introuvable): {self._rel(image_path)}")
             entry.failed = True
             with self._lock:
                 self.skipped_count += 1
@@ -431,7 +438,7 @@ class TaggerEngine:
 
         tags = self._generate_tags(image_path)
         if not tags:
-            log_callback(f"ÉCHEC (pas de tags): {image_path}")
+            log_callback(f"ÉCHEC (pas de tags): {self._rel(image_path)}")
             entry.failed = True
             with self._lock:
                 self.failed_count += 1
@@ -441,12 +448,12 @@ class TaggerEngine:
         if success:
             entry.processed = True
             entry.tag_count = len(tags)
-            log_callback(f"OK ({len(tags)} tags): {image_path}")
+            log_callback(f"OK ({len(tags)} tags): {self._rel(image_path)}")
             with self._lock:
                 self.processed_count += 1
             return True
         else:
-            log_callback(f"ÉCHEC (écriture XMP): {image_path}")
+            log_callback(f"ÉCHEC (écriture XMP): {self._rel(image_path)}")
             entry.failed = True
             with self._lock:
                 self.failed_count += 1
