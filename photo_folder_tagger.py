@@ -191,13 +191,14 @@ class TaggerEngine:
             return self.insects.generate_tags(image_path)
         else:  # vacances (défaut)
             # Si des tags _ai existent déjà, inutile de rappeler Ollama
+            # → retourne None (sentinel "déjà traité", distinct de [] = échec)
             suffix = self.xmp_manager.tag_suffix
             if suffix:
                 existing = self.xmp_manager.read_tags(image_path)
                 ai_tags = [t for t in existing if t.endswith(suffix)]
                 if ai_tags:
                     logger.debug(f"Tags _ai déjà présents, Ollama ignoré : {image_path.name}")
-                    return ai_tags
+                    return None
             return self.ollama.generate_tags(image_path)
 
     def check_mode_available(self) -> tuple[bool, str]:
@@ -411,7 +412,10 @@ class TaggerEngine:
                     fail_count += 1
                     continue
                 tags = self._generate_tags(image_path)
-                if tags:
+                if tags is None:
+                    log_callback(f"Déjà traité : {self._rel(image_path)}")
+                    ok_count += 1
+                elif tags:
                     log_callback(f"📷 {self._rel(image_path)}")
                     log_callback(f"   → {', '.join(tags)}\n")
                     ok_count += 1
@@ -445,6 +449,12 @@ class TaggerEngine:
             return False
 
         tags = self._generate_tags(image_path)
+        if tags is None:
+            log_callback(f"Déjà traité : {self._rel(image_path)}")
+            entry.processed = True
+            with self._lock:
+                self.skipped_count += 1
+            return True
         if not tags:
             log_callback(f"ÉCHEC (pas de tags): {self._rel(image_path)}")
             entry.failed = True
