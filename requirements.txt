@@ -44,8 +44,8 @@ astropy>=5.0.0
 astroquery>=0.4.7
 
 # Catalogue Messier/NGC/IC offline (fallback si SIMBAD indisponible)
-# pip install opennugc
-opennugc>=1.0.0
+# pip install pyongc
+pyongc>=1.5.0
 
 # Traitement XML/XMP
 lxml>=4.9.0

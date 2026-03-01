@@ -18,7 +18,7 @@ Dépendances optionnelles :
   pip install astroquery    # SIMBAD cone search (internet requis)
   pip install sep           # détection d'étoiles rapide (C)
   pip install photutils     # détection d'étoiles pure Python (fallback sep)
-  pip install opennugc      # catalogue NGC offline (fallback SIMBAD)
+  pip install pyongc        # catalogue NGC/IC/Messier offline (fallback SIMBAD)
 """
 
 import logging
@@ -65,7 +65,7 @@ except ImportError:
     logger.info("astroquery non installé — SIMBAD désactivé (pip install astroquery)")
 
 try:
-    import opennugc
+    import pyongc
     _OPENNUGC_AVAILABLE = True
 except ImportError:
     _OPENNUGC_AVAILABLE = False
@@ -436,28 +436,38 @@ class AstroClient:
     # -------------------------------------------------------------------------
 
     def _query_ngc(self, ra_deg: float, dec_deg: float) -> list[str]:
-        """Interroge le catalogue OpenNGC autour de (ra_deg, dec_deg)."""
+        """Interroge le catalogue PyONGC autour de (ra_deg, dec_deg)."""
         if self._ngc_db is None:
             try:
-                self._ngc_db = opennugc.OpenNGC()
+                # listObjects() retourne tous les objets du catalogue NGC/IC/Messier
+                self._ngc_db = pyongc.listObjects(printOut=False)
             except Exception as e:
-                logger.warning(f"Impossible de charger OpenNGC: {e}")
+                logger.warning(f"Impossible de charger PyONGC: {e}")
                 return []
 
         tags = []
         try:
-            for obj in self._ngc_db.get_objects():
+            for obj in self._ngc_db:
                 try:
-                    obj_ra  = float(obj.ra) * 15  # heures → degrés
-                    obj_dec = float(obj.dec)
-                except (TypeError, ValueError):
+                    coords = obj.getCoords()
+                    if coords is None or coords[0] is None:
+                        continue
+                    ra_hms, dec_dms = coords
+                    # RA : (heures, min, sec) → degrés
+                    obj_ra = (ra_hms[0] + ra_hms[1] / 60 + ra_hms[2] / 3600) * 15
+                    # Dec : ('+'/'-', deg, min, sec) → degrés
+                    sign = 1 if dec_dms[0] == '+' else -1
+                    obj_dec = sign * (dec_dms[1] + dec_dms[2] / 60 + dec_dms[3] / 3600)
+                except (TypeError, ValueError, IndexError):
                     continue
 
                 d_ra  = abs(ra_deg - obj_ra) * math.cos(math.radians(dec_deg))
                 d_dec = abs(dec_deg - obj_dec)
                 if math.sqrt(d_ra**2 + d_dec**2) <= self.ngc_search_radius:
                     name   = obj.name or ""
-                    common = getattr(obj, "commonname", "") or ""
+                    common = obj.commonnames or ""
+                    if isinstance(common, list):
+                        common = ", ".join(common)
                     otype  = getattr(obj, "type", "") or ""
                     label  = f"{name} ({common})" if common else name
                     if otype:
@@ -465,9 +475,9 @@ class AstroClient:
                     tags.append(label)
 
             if tags:
-                logger.info(f"OpenNGC: {len(tags)} objet(s) identifié(s)")
+                logger.info(f"PyONGC: {len(tags)} objet(s) identifié(s)")
         except Exception as e:
-            logger.warning(f"Erreur OpenNGC: {e}")
+            logger.warning(f"Erreur PyONGC: {e}")
 
         return tags
 

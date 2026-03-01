@@ -43,7 +43,7 @@ from xmp_manager import XMPManager
 try:
     from xmpToJpeg import process_folder as _xmp_to_jpeg_process
     _XMP_TO_JPEG_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception):
     _XMP_TO_JPEG_AVAILABLE = False
 
 # Modes disponibles

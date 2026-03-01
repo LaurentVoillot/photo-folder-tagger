@@ -22,8 +22,12 @@ from pathlib import Path
 
 try:
     import pyexiv2
-except ImportError:
-    print("❌  pyexiv2 n'est pas installé. Lancez : pip install pyexiv2")
+except (ImportError, OSError) as _e:
+    print("❌  pyexiv2 n'est pas disponible.")
+    print(f"    Détail : {_e}")
+    print("    macOS  : brew install inih && pip install pyexiv2")
+    print("    Linux  : pip install pyexiv2")
+    print("    Windows: pip install pyexiv2")
     sys.exit(1)
 
 try:
