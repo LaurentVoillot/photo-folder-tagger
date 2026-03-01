@@ -136,13 +136,27 @@ def embed_tags_in_jpeg(jpeg_path: Path, new_tags: list[str], dry_run: bool) -> b
 # Traitement d'un dossier
 # ---------------------------------------------------------------------------
 
-def process_folder(folder: Path, recursive: bool, dry_run: bool) -> dict:
+def process_folder(folder: Path, recursive: bool, dry_run: bool,
+                   log_callback=None, progress_callback=None) -> dict:
     """
     Parcourt le dossier, trouve les paires JPEG+XMP, embarque les tags.
+
+    Args:
+        folder:            Dossier racine à traiter.
+        recursive:         Inclure les sous-dossiers.
+        dry_run:           Simuler sans écrire.
+        log_callback:      Fonction(str) pour les messages (sinon print).
+        progress_callback: Fonction(current, total, filename) pour la progression.
 
     Returns:
         Dictionnaire de statistiques.
     """
+    def log(msg: str):
+        if log_callback:
+            log_callback(msg)
+        else:
+            print(msg)
+
     stats = {
         "scanned":  0,   # JPEG trouvés
         "paired":   0,   # JPEG avec sidecar XMP
@@ -158,9 +172,13 @@ def process_folder(folder: Path, recursive: bool, dry_run: bool) -> dict:
         if p.is_file() and p.suffix.lower() in JPEG_EXTENSIONS
         and not p.name.startswith(".")
     )
+    total = len(jpeg_files)
 
-    for jpeg_path in jpeg_files:
+    for i, jpeg_path in enumerate(jpeg_files):
         stats["scanned"] += 1
+
+        if progress_callback:
+            progress_callback(i + 1, total, jpeg_path.name)
 
         # Le sidecar porte le même nom avec l'extension .xmp
         xmp_path = jpeg_path.with_suffix(".xmp")
@@ -172,23 +190,20 @@ def process_folder(folder: Path, recursive: bool, dry_run: bool) -> dict:
 
         tags = read_tags_from_xmp(xmp_path)
         if not tags:
-            print(f"  –  ./{rel}  (XMP sans tags)")
+            log(f"  –  ./{rel}  (XMP sans tags)")
             stats["no_tags"] += 1
             continue
 
         result = embed_tags_in_jpeg(jpeg_path, tags, dry_run)
 
         if result is False:
-            # Erreur déjà affichée dans embed_tags_in_jpeg
             stats["errors"] += 1
         elif result is None:
-            # Déjà à jour
-            print(f"  ✓  ./{rel}  (déjà à jour)")
+            log(f"Déjà à jour : ./{rel}")
             stats["skipped"] += 1
         else:
-            # result = liste des tags ajoutés
             prefix = "[DRY-RUN] " if dry_run else ""
-            print(f"  ✦  {prefix}./{rel}  +{len(result)} tag(s) : {', '.join(result)}")
+            log(f"OK ({len(result)} tags) {prefix}: ./{rel}  ← {', '.join(result)}")
             stats["updated"] += 1
 
     return stats
@@ -248,7 +263,8 @@ def main():
     print(f"──────────────────────────────────────────────────────────\n")
 
     # ── Traitement ─────────────────────────────────────────────────────────
-    stats = process_folder(folder, recursive=args.recursive, dry_run=args.dry_run)
+    stats = process_folder(folder, recursive=args.recursive, dry_run=args.dry_run,
+                           log_callback=print)
 
     # ── Résumé ─────────────────────────────────────────────────────────────
     print(f"\n── Résumé ────────────────────────────────────────────────")

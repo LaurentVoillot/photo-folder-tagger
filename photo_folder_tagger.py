@@ -40,6 +40,12 @@ from ollama_client import OllamaClient
 from settings_dialog import SettingsDialog
 from xmp_manager import XMPManager
 
+try:
+    from xmpToJpeg import process_folder as _xmp_to_jpeg_process
+    _XMP_TO_JPEG_AVAILABLE = True
+except ImportError:
+    _XMP_TO_JPEG_AVAILABLE = False
+
 # Modes disponibles
 MODES = {
     "vacances": {
@@ -518,6 +524,39 @@ class EngineWorker(QThread):
             )
 
 
+class XmpToJpegWorker(QThread):
+    """Embarque les tags des sidecars .xmp dans les JPEG (thread background)."""
+
+    def __init__(self, folder_path: Path, recursive: bool):
+        super().__init__()
+        self.folder_path = folder_path
+        self.recursive = recursive
+        self.signals = WorkerSignals()
+
+    def run(self):
+        try:
+            self.signals.log.emit(f"── XMP → JPEG ── dossier : {self.folder_path}")
+            self.signals.log.emit(
+                f"Scan {'récursif' if self.recursive else 'racine uniquement'}…\n"
+            )
+            stats = _xmp_to_jpeg_process(
+                self.folder_path,
+                recursive=self.recursive,
+                dry_run=False,
+                log_callback=self.signals.log.emit,
+                progress_callback=self.signals.progress.emit,
+            )
+            msg = (
+                f"XMP→JPEG terminé : {stats['updated']} mis à jour, "
+                f"{stats['skipped']} déjà à jour, "
+                f"{stats['no_tags']} sans tags, "
+                f"{stats['errors']} erreur(s)."
+            )
+            self.signals.done.emit(stats["errors"] == 0, msg)
+        except Exception as e:
+            self.signals.done.emit(False, f"Erreur XMP→JPEG : {e}")
+
+
 # ---------------------------------------------------------------------------
 # Styles CSS Qt
 # ---------------------------------------------------------------------------
@@ -705,6 +744,15 @@ QPushButton#btn_test {
 }
 QPushButton#btn_test:hover { background-color: #a569bd; }
 QPushButton#btn_test:pressed { background-color: #76369a; }
+
+/* Bouton XMP → JPEG */
+QPushButton#btn_xmp_jpeg {
+    background-color: #1a5276;
+    color: white;
+}
+QPushButton#btn_xmp_jpeg:hover { background-color: #1f618d; }
+QPushButton#btn_xmp_jpeg:pressed { background-color: #154360; }
+QPushButton#btn_xmp_jpeg:disabled { background-color: #3a3a4a; color: #666680; }
 
 /* Bouton Settings */
 QPushButton#btn_settings {
@@ -986,7 +1034,18 @@ class MainWindow(QMainWindow):
         self.btn_test.setObjectName("btn_test")
         self.btn_test.clicked.connect(self._test)
 
-        for btn in (self.btn_start, self.btn_pause, self.btn_resume, self.btn_test):
+        self.btn_xmp_jpeg = QPushButton("📥  XMP → JPEG")
+        self.btn_xmp_jpeg.setObjectName("btn_xmp_jpeg")
+        self.btn_xmp_jpeg.setEnabled(_XMP_TO_JPEG_AVAILABLE)
+        self.btn_xmp_jpeg.setToolTip(
+            "Embarque les tags XMP dans les JPEG (Lightroom-compatible)"
+            if _XMP_TO_JPEG_AVAILABLE
+            else "Requiert : pip install pyexiv2"
+        )
+        self.btn_xmp_jpeg.clicked.connect(self._run_xmp_to_jpeg)
+
+        for btn in (self.btn_start, self.btn_pause, self.btn_resume,
+                    self.btn_test, self.btn_xmp_jpeg):
             btn_row.addWidget(btn)
 
         btn_row.addStretch()
@@ -1067,9 +1126,10 @@ class MainWindow(QMainWindow):
         msg_l = message.lower()
         if msg_l.startswith("ok") or "tags)" in msg_l:
             level = "ok"
-        elif "échec" in msg_l or "erreur" in msg_l or "error" in msg_l:
+        elif "échec" in msg_l or "erreur" in msg_l or "error" in msg_l or "✗" in message:
             level = "error"
-        elif "attention" in msg_l or "warning" in msg_l or "ignoré" in msg_l:
+        elif ("attention" in msg_l or "warning" in msg_l
+              or "ignoré" in msg_l or "déjà" in msg_l):
             level = "warn"
         else:
             level = "info"
@@ -1281,6 +1341,19 @@ class MainWindow(QMainWindow):
         self._set_running(True)
         self._launch_worker("dry", folder_path)
 
+    def _run_xmp_to_jpeg(self):
+        folder_path = self._get_folder()
+        if not folder_path:
+            return
+        self._clear_log()
+        self._set_running(True)
+        recursive = self.config["images"]["recursive"]
+        self._xmp_worker = XmpToJpegWorker(folder_path, recursive)
+        self._xmp_worker.signals.log.connect(self._log_auto)
+        self._xmp_worker.signals.progress.connect(self._on_progress)
+        self._xmp_worker.signals.done.connect(self._on_done)
+        self._xmp_worker.start()
+
     # -------------------------------------------------------------------------
     # Worker
     # -------------------------------------------------------------------------
@@ -1337,6 +1410,7 @@ class MainWindow(QMainWindow):
         self._running = running
         self.btn_start.setEnabled(not running)
         self.btn_test.setEnabled(not running)
+        self.btn_xmp_jpeg.setEnabled(not running and _XMP_TO_JPEG_AVAILABLE)
         self.btn_pause.setEnabled(running)
         if not running:
             self.btn_pause.setText("⏸  Pause")
