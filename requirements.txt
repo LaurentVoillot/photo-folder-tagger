@@ -50,6 +50,11 @@ opennugc>=1.0.0
 # Traitement XML/XMP
 lxml>=4.9.0
 
+# xmpToJpeg : embarque les tags XMP directement dans les JPEG (multiplateforme)
+# Wheels précompilés disponibles pour macOS arm64/x86_64, Windows, Linux
+# pip install pyexiv2
+pyexiv2>=2.9.0
+
 # Lecture des fichiers de configuration YAML
 PyYAML>=6.0.0
 
