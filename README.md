@@ -125,14 +125,16 @@ cd photo-folder-tagger
 ### 3 — Install core Python dependencies
 
 ```bash
-pip install PyQt6 Pillow rawpy requests lxml PyYAML
-```
-
-Or install everything at once (see mode-specific notes before running):
-
-```bash
 pip install -r requirements.txt
 ```
+
+For the 🔭 **Astro** mode, install the additional packages separately:
+
+```bash
+pip install -r requirements-astro.txt
+```
+
+> Without `requirements-astro.txt`, the Astro button is **greyed out** in the interface. All other modes work normally.
 
 ---
 

@@ -1,0 +1,25 @@
+# Photo Folder Tagger — Dépendances supplémentaires pour le mode 🔭 Astro
+#
+# Installez EN PLUS de requirements.txt :
+#   pip install -r requirements-astro.txt
+#
+# Sans ces paquets, le bouton Astro est grisé dans l'interface.
+
+# Plate solving offline : identifie les étoiles et calcule RA/Dec
+# (~5 Go d'index Tycho-2+Gaia téléchargés automatiquement au premier lancement)
+astrometry>=4.0.0
+
+# Détection d'étoiles rapide (C-extension, recommandé)
+sep>=1.2.0
+
+# Détection d'étoiles pure Python (fallback si sep non disponible)
+photutils>=1.10.0
+
+# Calcul de coordonnées célestes et WCS (World Coordinate System)
+astropy>=5.0.0
+
+# SIMBAD / VizieR cone search (nécessite internet, base CDS Strasbourg 20M+ objets)
+astroquery>=0.4.7
+
+# Catalogue NGC/IC/Messier offline (fallback si SIMBAD indisponible)
+pyongc>=1.5.0

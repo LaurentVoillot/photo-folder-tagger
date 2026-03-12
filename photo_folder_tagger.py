@@ -21,12 +21,12 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl
-from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QDragEnterEvent, QDropEvent
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
+from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QFileDialog, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QProgressBar, QPushButton, QSizePolicy,
+    QMessageBox, QProgressBar, QPushButton,
     QStatusBar, QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -45,6 +45,12 @@ try:
     _XMP_TO_JPEG_AVAILABLE = True
 except (ImportError, OSError, Exception):
     _XMP_TO_JPEG_AVAILABLE = False
+
+try:
+    import astropy  # noqa: F401 — présence suffisante pour activer le mode Astro
+    _ASTRO_AVAILABLE = True
+except ImportError:
+    _ASTRO_AVAILABLE = False
 
 # Modes disponibles
 MODES = {
@@ -940,13 +946,16 @@ class MainWindow(QMainWindow):
         body_layout.setSpacing(10)
 
         # ── Sélecteur de mode (2 lignes × 3 boutons) ──────────────────────
-        from PyQt6.QtWidgets import QGridLayout
         mode_group = QGroupBox("Mode de taguage")
         mode_outer = QVBoxLayout(mode_group)
         mode_outer.setSpacing(6)
 
         self._mode_buttons: dict[str, QPushButton] = {}
         current_mode = self.config.get("mode", "vacances")
+        if current_mode == "astro" and not _ASTRO_AVAILABLE:
+            current_mode = "vacances"
+            self.config["mode"] = "vacances"
+            self.engine.set_mode("vacances")
 
         mode_ids = list(MODES.keys())   # 6 modes
         # Ligne 1 : indices 0-2  /  Ligne 2 : indices 3-5
@@ -963,8 +972,16 @@ class MainWindow(QMainWindow):
                 btn.setObjectName(f"btn_mode_{mode_id}")
                 btn.setCheckable(True)
                 btn.setChecked(mode_id == current_mode)
-                btn.setToolTip(mode_info["desc"])
-                btn.clicked.connect(lambda checked, m=mode_id: self._on_mode_selected(m))
+                if mode_id == "astro" and not _ASTRO_AVAILABLE:
+                    btn.setEnabled(False)
+                    btn.setCheckable(False)
+                    btn.setToolTip(
+                        "Mode Astro non disponible\n"
+                        "Installez : pip install -r requirements-astro.txt"
+                    )
+                else:
+                    btn.setToolTip(mode_info["desc"])
+                    btn.clicked.connect(lambda checked, m=mode_id: self._on_mode_selected(m))
                 self._mode_buttons[mode_id] = btn
                 row_layout.addWidget(btn)
             mode_outer.addLayout(row_layout)
@@ -1411,6 +1428,9 @@ class MainWindow(QMainWindow):
         self.btn_start.setEnabled(not running)
         self.btn_test.setEnabled(not running)
         self.btn_xmp_jpeg.setEnabled(not running and _XMP_TO_JPEG_AVAILABLE)
+        # Le bouton Astro reste grisé si les packages ne sont pas installés
+        if _ASTRO_AVAILABLE:
+            self._mode_buttons["astro"].setEnabled(not running)
         self.btn_pause.setEnabled(running)
         if not running:
             self.btn_pause.setText("⏸  Pause")
