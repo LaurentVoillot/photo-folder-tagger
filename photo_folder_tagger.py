@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+import torch
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
