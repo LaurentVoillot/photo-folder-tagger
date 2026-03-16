@@ -486,6 +486,7 @@ photo-folder-tagger/
 ├── settings_dialog.py        ← Settings window (PyQt6)
 ├── fix_double_suffix.py      ← Repair utility for _ai_ai tags
 ├── requirements.txt
+├── requirements-astro.txt    ← Additional deps for Astro mode
 └── README.md
 ```
 
