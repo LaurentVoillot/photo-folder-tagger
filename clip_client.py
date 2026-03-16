@@ -1,8 +1,14 @@
 """
 Client CLIP local pour le mode Balade.
-Utilise open_clip (ViT-B-16) sur MPS/GPU Apple Silicon.
+Utilise open_clip (SigLIP2 SO400M/14 par défaut) sur MPS/CUDA/CPU.
 Reconnaissance zero-shot via vocabulaire de tags prédéfini.
 ~46ms/photo sur M1 Max — aucun serveur externe requis.
+
+Modèles supportés (config.yaml → clip.model) :
+  hf-hub:timm/ViT-SO400M-14-SigLIP2  ← défaut  ~83% ImageNet  900 MB
+  hf-hub:timm/ViT-B-16-SigLIP2                  ~79% ImageNet  150 MB  (rapide)
+  ViT-H-14-quickgelu  + pretrained: dfn5b        ~84% ImageNet  2.5 GB  (meilleur)
+  ViT-B-16            + pretrained: openai        ~68% ImageNet  150 MB  (ancien)
 """
 
 import logging
@@ -60,8 +66,8 @@ class ClipClient:
 
     def __init__(self, config: dict):
         clip_cfg = config.get("clip", {})
-        self.model_name = clip_cfg.get("model", "ViT-B-16")
-        self.pretrained = clip_cfg.get("pretrained", "openai")
+        self.model_name  = clip_cfg.get("model", "hf-hub:timm/ViT-SO400M-14-SigLIP2")
+        self.pretrained  = clip_cfg.get("pretrained", "")
         self.top_k = clip_cfg.get("top_k", 8)
         self.vocabulary = clip_cfg.get("vocabulary", DEFAULT_VOCABULARY)
 
@@ -96,9 +102,19 @@ class ClipClient:
                 else:
                     self._device = "cpu"
 
-                self._model, _, self._preprocess = open_clip.create_model_and_transforms(
-                    self.model_name, pretrained=self.pretrained
-                )
+                # Les modèles hf-hub: embarquent leurs poids dans l'identifiant ;
+                # on ne passe pas pretrained pour éviter un conflit.
+                is_hf_hub = self.model_name.startswith("hf-hub:")
+                if is_hf_hub:
+                    self._model, _, self._preprocess = (
+                        open_clip.create_model_and_transforms(self.model_name)
+                    )
+                else:
+                    self._model, _, self._preprocess = (
+                        open_clip.create_model_and_transforms(
+                            self.model_name, pretrained=self.pretrained or None
+                        )
+                    )
                 self._model = self._model.to(self._device).eval()
                 self._tokenizer = open_clip.get_tokenizer(self.model_name)
 

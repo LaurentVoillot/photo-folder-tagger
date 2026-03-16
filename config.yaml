@@ -31,8 +31,13 @@ prompt:
 
 # ── Mode Balade : CLIP local (ViT-B-16) ──────────────────────────────────────
 clip:
-  model: ViT-B-16
-  pretrained: openai
+  # Modèle par défaut : SigLIP2 SO400M/14 (~83% ImageNet, 900 MB, téléchargé auto depuis HuggingFace)
+  model: "hf-hub:timm/ViT-SO400M-14-SigLIP2"
+  pretrained: ""          # laisser vide pour les modèles hf-hub:
+  # Alternatives :
+  #   hf-hub:timm/ViT-B-16-SigLIP2      (~79% ImageNet, 150 MB, plus rapide)
+  #   ViT-H-14-quickgelu + dfn5b         (~84% ImageNet, 2.5 GB, meilleur)
+  #   ViT-B-16           + openai        (~68% ImageNet, 150 MB, ancien modèle)
   top_k: 8
   # Vocabulaire de tags — personnalisez selon vos besoins
   vocabulary:
